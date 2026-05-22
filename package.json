@@ -16,6 +16,10 @@
       {
         "command": "codexlog.helloWorld",
         "title": "Hello World"
+      },
+      {
+        "command": "codexlog.logTelemetry",
+        "title": "Log Telemetry"
       }
     ]
   },
