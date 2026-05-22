@@ -2,7 +2,7 @@
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode'; // This gives access to: editor events, documents, commands, windows, workspace, APIs
 import { startActivityTracking } from './activityTraker';
-import { start } from 'repl';
+import {isCopilotActive} from './detectCopilot';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -30,6 +30,10 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.window.showInformationMessage(`Total Edits: ${stats.totalEdits}, Total Saves: ${stats.totalSaves}`); // Display the telemetry summary to the user in an information message box
 	});
 	context.subscriptions.push(summaryCommand); // This ensures that the command is disposed of when the extension is deactivated
+
+	// detecting if GitHub Copilot is active in the user's VSCode environment, allowing the extension to adjust its behavior accordingly
+	const copilotStatus = isCopilotActive();
+	console.log('GitHub Copilot Status:', copilotStatus);
 }
 
 // This method is called when your extension is deactivated
