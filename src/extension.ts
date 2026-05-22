@@ -3,6 +3,9 @@
 import { time } from 'console';
 import * as vscode from 'vscode'; // This gives access to: editor events, documents, commands, windows, workspace, APIs
 
+let totalEdits = 0; // Global variable to track total edits across all documents
+let totalSaves = 0; // Global variable to track total saves across all documents
+
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
@@ -19,6 +22,7 @@ export function activate(context: vscode.ExtensionContext) {
 		// Display a message box to the user
 		vscode.window.showInformationMessage('Hello VS Code!');
 	});
+	context.subscriptions.push(disposable); // This ensures that the command is disposed of when the extension is deactivated
 
 	// Creating a reusable function to log telemetry events
 	// standardizing the format of telemetry data for better analysis
@@ -31,51 +35,36 @@ export function activate(context: vscode.ExtensionContext) {
 		console.log('Telemetry Event:', JSON.stringify(payload));
 	}
 
-	// Triggers telemetry logging when a text document is changed, capturing details about the change for analysis
-	vscode.workspace.onDidChangeTextDocument((event) => {
-		logTelemetry('textDocumentChanged', {
-			fileName: event.document.fileName,
-			language: event.document.languageId,
-			changes: event.contentChanges.length
-		});
-	});
-
-	// Triggers telemetry logging when a text document is saved, capturing details about the saved document for analysis
-	// Used to indicate checkpoint behavour, work cadence, and likely completion milestones
-	// can later evaluate edits per save, time between saves, and assignment engagement
-	vscode.workspace.onDidSaveTextDocument((document) => {
-		logTelemetry('document_saved', {
-			fileName: document.fileName,
-			language: document.languageId
-		});
-	});
-
-
-	context.subscriptions.push(disposable); // This ensures that the command is disposed of when the extension is deactivated
-
-
 	// Adding event listeners to the extension's subscriptions to ensure they are properly disposed of when the extension is deactivated, 
 	// preventing memory leaks and ensuring clean resource management
 	context.subscriptions.push(
+		// Triggers telemetry logging when a text document is changed, capturing details about the change for analysis
 		vscode.workspace.onDidChangeTextDocument((event) => {
-			logTelemetry('textDocumentChanged', {
+			logTelemetry('textDocumentChanged', { // returning the event name and relevant data about the change for analysis
 				fileName: event.document.fileName,
 				language: event.document.languageId,
 				changes: event.contentChanges.length
 			});
+			totalEdits++;
 		})
 	);
 
 	context.subscriptions.push(
+		// Triggers telemetry logging when a text document is saved, capturing details about the saved document for analysis
+		// Used to indicate checkpoint behavour, work cadence, and likely completion milestones
+		// can later evaluate edits per save, time between saves, and assignment engagement
 		vscode.workspace.onDidSaveTextDocument((document) => {
 			logTelemetry('document_saved', {
 				fileName: document.fileName,
 				language: document.languageId
 			});
+			totalSaves++;
 		})
 	);
 
 }
 
 // This method is called when your extension is deactivated
-export function deactivate() {}
+export function deactivate() {
+	console.log('Extension "codexlog" has been deactivated. Total edits:', totalEdits, 'Total saves:', totalSaves);
+}
