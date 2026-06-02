@@ -12,4 +12,5 @@ export 	function logTelemetry(eventName: string, data: any) {
 			data
 		};
 		console.log('Telemetry Event:', JSON.stringify(payload));
+
 	}

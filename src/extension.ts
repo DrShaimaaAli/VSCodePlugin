@@ -3,9 +3,13 @@
 import * as vscode from 'vscode'; // This gives access to: editor events, documents, commands, windows, workspace, APIs
 import { startActivityTracking } from './activityTraker';
 import {isCopilotActive} from './detectCopilot';
+import {startSessionTracking} from './sessionTracker';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
+
+let activeSession: any; // Variable to hold the active session tracking instance, allowing it to be accessed and ended when the extension is deactivated
+
 export function activate(context: vscode.ExtensionContext) {
 
 	// Use the console to output diagnostic information (console.log) and errors (console.error)
@@ -23,7 +27,8 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(disposable); // This ensures that the command is disposed of when the extension is deactivated
 
 	const tracker = startActivityTracking(context); // Start tracking user activity and logging telemetry data, passing the extension context for proper resource management
-	
+	activeSession = startSessionTracking(context); // Start tracking the user's session, including workspace activity and idle time, passing the extension context for proper resource management
+
 	// Registering a new command to log telemetry data, allowing users to view a summary of their editing activity
 	const summaryCommand = vscode.commands.registerCommand('codexlog.logTelemetry', () => {
 		const stats = tracker.getStats(); // receive the current stats from the activity tracker, which includes total edits and saves
@@ -34,8 +39,12 @@ export function activate(context: vscode.ExtensionContext) {
 	// detecting if GitHub Copilot is active in the user's VSCode environment, allowing the extension to adjust its behavior accordingly
 	const copilotStatus = isCopilotActive();
 	console.log('GitHub Copilot Status:', copilotStatus);
+
+	const sessionTracker = startSessionTracking(context); // Start tracking the user's session, including workspace activity and idle time, passing the extension context for proper resource management
+	context.subscriptions.push({ dispose: () => sessionTracker.endSession() }); // Ensure that the session tracking is properly ended and logged when the extension is deactivated
 }
 
 // This method is called when your extension is deactivated
 export function deactivate() {
+	activeSession?.endSession(); // Call the endSession function to log the final session summary when the extension is deactivated
 }
