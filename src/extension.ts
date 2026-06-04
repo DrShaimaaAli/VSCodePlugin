@@ -1,7 +1,7 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode'; // This gives access to: editor events, documents, commands, windows, workspace, APIs
-import { startActivityTracking } from './activityTraker';
+import { startActivityTracking } from './activityTracker';
 import {isCopilotActive} from './detectCopilot';
 import {startSessionTracking} from './sessionTracker';
 
@@ -39,9 +39,6 @@ export function activate(context: vscode.ExtensionContext) {
 	// detecting if GitHub Copilot is active in the user's VSCode environment, allowing the extension to adjust its behavior accordingly
 	const copilotStatus = isCopilotActive();
 	console.log('GitHub Copilot Status:', copilotStatus);
-
-	const sessionTracker = startSessionTracking(context); // Start tracking the user's session, including workspace activity and idle time, passing the extension context for proper resource management
-	context.subscriptions.push({ dispose: () => sessionTracker.endSession() }); // Ensure that the session tracking is properly ended and logged when the extension is deactivated
 }
 
 // This method is called when your extension is deactivated

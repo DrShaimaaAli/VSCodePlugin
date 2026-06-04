@@ -31,7 +31,7 @@ export function startSessionTracking (context: vscode.ExtensionContext) {
     const testListener = vscode.workspace.onDidChangeTextDocument(() => registerActivity()); // Listen for text document changes to detect coding activity
     context.subscriptions.push(testListener); // Ensure the listener is disposed of when the extension is deactivated
 
-    const idleChecker = setInterval(() => { // Set up an interval to check for idle time every minute
+    const idleChecker = setInterval(() => { // Set up an interval to check for idle time
         const now = Date.now();
         const idleDuration = now - lastActivityTime; // Calculate the duration of idle time since the last activity
         if (idleDuration >= idleThreshold && !isIdle) { // If the idle duration exceeds the threshold and the user is not already marked as idle
@@ -41,12 +41,13 @@ export function startSessionTracking (context: vscode.ExtensionContext) {
     }, 10000); // Check every 10 seconds
     context.subscriptions.push({ dispose: () => clearInterval(idleChecker) }); // Ensure the idle checker interval is cleared when the extension is deactivated
 
-    vscode.workspace.onDidChangeWorkspaceFolders(event => {logTelemetry("workspace_changed", {added: event.added.length, removed: event.removed.length});}); // Listen for workspace changes to log when workspaces are opened or closed
+    const folderListener = vscode.workspace.onDidChangeWorkspaceFolders(event => {logTelemetry("workspace_changed", {added: event.added.length, removed: event.removed.length});});
+    context.subscriptions.push(folderListener); // Listen for changes in workspace folders to log when workspaces are added or removed
 
     function endSession() {
         const totalTime = Date.now() - sessionStart; // Calculate the total session duration from the start time to the current time
         sessionStart; // Log the end of the session with total duration, active coding time, and idle time for analysis
-        logTelemetry("session_summary", {durationMinutes: Math.floor(totalTime / 60000), activeCodingMinutes: Math.floor(activeCodingTime / 60000), idleMinutes: Math.floor(idleTime / 60000)});
+        logTelemetry("session_summary", {durationMinutes: Math.floor(totalTime / 60000), activeCodingMinutes: Math.floor(activeCodingTime / 60000), idleMinutes: Math.floor((totalTime - activeCodingTime) / 60000)});
     }
 
     return{endSession}; // Return the endSession function so it can be called when the extension is deactivated to log the final session summary
