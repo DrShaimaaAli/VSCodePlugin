@@ -1,71 +1,80 @@
-# codexlog README
+# CodexLog — VS Code Activity & Telemetry Extension
 
-This is the README for your extension "codexlog". After writing up a brief description, we recommend including the following sections.
-
-## Features
-
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
-
-For example if there is an image subfolder under your extension project workspace:
-
-\!\[feature X\]\(images/feature-x.png\)
-
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+Small extension that tracks editor activity (edits, saves, sessions) and logs telemetry for development and analytics.
 
 ## Requirements
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+- Node.js 18+ (recommended)
+- npm
+- Visual Studio Code (for extension development)
 
-## Extension Settings
+## Quick setup
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+1. Clone the repository and install dependencies:
 
-For example:
+```bash
+git clone <repo-url>
+cd VSCodePlugin
+npm install
+```
 
-This extension contributes the following settings:
+2. Open the project in VS Code and run the extension host (F5):
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+```bash
+code .
+```
 
-## Known Issues
+3. Use the live-watch build during development:
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+```bash
+npm run watch
+```
 
-## Release Notes
+## Development notes
 
-Users appreciate release notes as you update your extension.
+- Source is under `src/`.
+- Activity tracking implemented in `src/activityTracker.ts` (tracks edits and saves).
+- Telemetry helper is in `src/telemetry.ts` and `src/types.ts` holds `TelemetryEvent`.
+- Commands registered in `src/extension.ts` include `codexlog.logTelemetry` which shows a console summary.
+- Copilot detection is implemented in `src/detectCopilot.ts` and session tracking is started via `src/sessionTracker.ts`.
 
-### 1.0.0
+## Current state (Unreleased)
 
-Initial release of ...
+- Implemented activity tracking for text document edits and saves.
+- Added telemetry logging helper and shared telemetry type.
+- Registered a telemetry summary command for quick inspection.
+- Session tracking startup and GitHub Copilot detection are wired in.
+- Telemetry currently logs to the VS Code console (`console.log`) for development.
 
-### 1.0.1
+## Next steps (planned)
 
-Fixed issue #.
+1. Transport: send telemetry to a backend analytics server for dashboarding.
+   - Use secure HTTPS endpoints, API key or token authentication, and respect user privacy.
+   - Implement batching, backoff/retry, and local buffering to prevent data loss.
 
-### 1.1.0
+2. Payload & dashboard: define backend-friendly event schemas and key metrics (edits/day, saves/day, active session length).
 
-Added features X, Y, and Z.
+3. Privacy & consent: add an opt-in flow before sending production telemetry; document data collected and retention.
+
+4. Tests & CI: add unit tests for telemetry formatting and integration tests for transport logic.
+
+## How to implement the telemetry backend (short guide)
+
+- Endpoint: POST /telemetry with JSON payloads over TLS.
+- Authentication: use an API key or token stored in environment or VS Code secret storage.
+- Reliability: batch events (e.g. 50 or 5s), retry with exponential backoff, and persist unsent events to disk.
+- Security & privacy: hash or omit personally-identifying fields; expose a setting to opt out and to clear stored telemetry.
+
+## Files of interest
+
+- [CHANGELOG.md](CHANGELOG.md) — high-level release notes and progress.
+- `src/README` — quick local setup for contributing to the extension.
+- `src/activityTracker.ts`, `src/telemetry.ts`, `src/extension.ts`, `src/detectCopilot.ts`, `src/sessionTracker.ts`
+
+## Contributing
+
+- Follow the repo setup steps above.
+- Open an issue for design decisions or telemetry schema changes.
 
 ---
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+This README was updated to reflect current development progress and next steps for adding backend telemetry and dashboarding.
