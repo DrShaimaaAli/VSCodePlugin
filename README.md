@@ -34,6 +34,7 @@ npm run watch
 
 - Source is under `src/`.
 - Activity tracking implemented in `src/activityTracker.ts` (tracks edits and saves).
+- Error tracking implemented in `src/errorTracking.ts` (captures console errors and stack traces, plus save-time diagnostics).
 - Telemetry helper is in `src/telemetry.ts` and `src/types.ts` holds `TelemetryEvent`.
 - Commands registered in `src/extension.ts` include `codexlog.logTelemetry` which shows a console summary.
 - Copilot detection is implemented in `src/detectCopilot.ts` and session tracking is started via `src/sessionTracker.ts`.
@@ -44,6 +45,7 @@ npm run watch
 - Added telemetry logging helper and shared telemetry type.
 - Registered a telemetry summary command for quick inspection.
 - Session tracking startup and GitHub Copilot detection are wired in.
+- Added error tracking support in `src/errorTracking.ts` to capture runtime errors, stack traces, and diagnostics from saved files.
 - Telemetry currently logs to the VS Code console (`console.log`) for development.
 
 ## Next steps (planned)

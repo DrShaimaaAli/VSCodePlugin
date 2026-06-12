@@ -8,6 +8,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 - Implemented activity tracking for text document edits and saves via `src/activityTracker.ts`
 - Added telemetry logging helper in `src/telemetry.ts` and shared `TelemetryEvent` type in `src/types.ts`
+- Added error tracking in `src/errorTracking.ts` to capture runtime errors and stack traces from the extension environment
 - Registered a telemetry summary command `codexlog.logTelemetry` in `src/extension.ts`
 - Added session tracking startup and GitHub Copilot detection using `src/sessionTracker.ts` and `src/detectCopilot.ts`
 - Current telemetry output is logged to the VS Code console for development/inspection
