@@ -4,6 +4,7 @@ import * as vscode from 'vscode'; // This gives access to: editor events, docume
 import { startActivityTracking } from './activityTracker';
 import {isCopilotActive} from './detectCopilot';
 import {startSessionTracking} from './sessionTracker';
+import {startErrorTracking} from './errorTracking';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -28,6 +29,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	const tracker = startActivityTracking(context); // Start tracking user activity and logging telemetry data, passing the extension context for proper resource management
 	activeSession = startSessionTracking(context); // Start tracking the user's session, including workspace activity and idle time, passing the extension context for proper resource management
+	startErrorTracking(context); // Start tracking linter/compiler errors for opened files, logging diagnostics on save, passing the extension context for proper resource management
 
 	// Registering a new command to log telemetry data, allowing users to view a summary of their editing activity
 	const summaryCommand = vscode.commands.registerCommand('codexlog.logTelemetry', () => {
