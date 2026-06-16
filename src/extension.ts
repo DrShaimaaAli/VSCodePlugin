@@ -27,8 +27,9 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 	context.subscriptions.push(disposable); // This ensures that the command is disposed of when the extension is deactivated
 
-	const tracker = startActivityTracking(context); // Start tracking user activity and logging telemetry data, passing the extension context for proper resource management
 	activeSession = startSessionTracking(context); // Start tracking the user's session, including workspace activity and idle time, passing the extension context for proper resource management
+	const tracker = startActivityTracking(context); // Start tracking user activity and logging telemetry data, passing the extension context for proper resource management
+
 	startErrorTracking(context); // Start tracking linter/compiler errors for opened files, logging diagnostics on save, passing the extension context for proper resource management
 
 	// Registering a new command to log telemetry data, allowing users to view a summary of their editing activity

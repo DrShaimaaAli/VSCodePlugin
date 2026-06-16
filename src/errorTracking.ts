@@ -7,10 +7,9 @@ export function startErrorTracking(context: vscode.ExtensionContext) {
     // Track URIs of filed opened during this session to know which files to monitor for diagnostics
     const trackedFiles = new Set<string>();
 
-    // Register newly opened files
+    // Register newly opened files (track both saved files and untitled editors)
     const openListener = vscode.workspace.onDidOpenTextDocument(document => {
-        // Only track real files on disk, not virtual documents like untitled files or output panels
-        if (document.uri.scheme !== 'file') {
+        if (document.uri.scheme !== 'file' && document.uri.scheme !== 'untitled') {
             return;
         }
         trackedFiles.add(document.uri.toString());
@@ -20,11 +19,14 @@ export function startErrorTracking(context: vscode.ExtensionContext) {
 
     // On save, log error diagnostics for the saved file if it's being tracked
     const saveListener = vscode.workspace.onDidSaveTextDocument(document => {
-        const uriString = document.uri.toString();
-
-        if (!trackedFiles.has(uriString)) {
-            return; // Ignore saves for files we aren't tracking
+        // Only consider real files and saved untitled editors
+        if (document.uri.scheme !== 'file' && document.uri.scheme !== 'untitled') {
+            return;
         }
+
+        const uriString = document.uri.toString();
+        // Ensure the saved document is tracked (covers untitled -> file URI transitions)
+        trackedFiles.add(uriString);
 
         const diagnostics = vscode.languages.getDiagnostics(document.uri);
         const errorDiagnostics = diagnostics.filter(diag => diag.severity === vscode.DiagnosticSeverity.Error); // Filter to only include error diagnostics, excluding warnings and informational messages
@@ -43,14 +45,14 @@ export function startErrorTracking(context: vscode.ExtensionContext) {
             fileName: document.fileName,
             language: document.languageId,
             errorCount: errorDiagnostics.length,
-            errors: errorDiagnostics.map(diag => ({
+                errors: errorDiagnostics.map(diag => ({
                 message: diag.message,
-                source: diag.source ?? 'unkown',
+                source: diag.source ?? 'unknown',
                 range: {
                     startLine: diag.range.start.line,
                     startCharacter: diag.range.start.character,
                     endLine: diag.range.end.line,
-                    endChar: diag.range.end.character,
+                    endCharacter: diag.range.end.character,
                 }
             }))
         });

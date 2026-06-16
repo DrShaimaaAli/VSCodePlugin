@@ -50,5 +50,5 @@ export function startSessionTracking (context: vscode.ExtensionContext) {
         logTelemetry("session_summary", {durationMinutes: Math.floor(totalTime / 60000), activeCodingMinutes: Math.floor(activeCodingTime / 60000), idleMinutes: Math.floor((totalTime - activeCodingTime) / 60000)});
     }
 
-    return{endSession}; // Return the endSession function so it can be called when the extension is deactivated to log the final session summary
+    return{endSession}; // Return the endSession function to be called when the extension is deactivated, allowing it to log the final session summary
 }
