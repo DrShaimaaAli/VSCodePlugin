@@ -21,6 +21,65 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		// Triggers telemetry logging when a text document is changed, capturing details about the change for analysis
 		vscode.workspace.onDidChangeTextDocument((event) => {
+			for (const change of event.contentChanges) {
+				const insertedText = change.text;
+				const lineCount = insertedText.split('\n').length;
+				const charCount = insertedText.length;
+
+				const isLikelyAISuggestion = lineCount >= AI_MIN_LINES && charCount >= AI_MIN_CHARS && change.rangeLength === 0; // Heuristic to identify potential AI-generated code based on the number of lines and characters inserted, and ensuring it's an insertion (not a replacement)
+				if (isLikelyAISuggestion) {
+					// Log acceptance
+					logTelemetry('aiSuggestionAccepted', {
+						fileName: event.document.fileName,
+						language: event.document.languageId,
+						insertedLines: lineCount,
+						insertedChars: charCount,
+					});
+
+					if (postAIIdleTimer) clearTimeout(postAIIdleTimer); // Clear any existing idle timer to reset the countdown for logging idle time after AI-generated code is detected
+					postAIIdleTimer = setTimeout(() => {
+						logTelemetry('postAISuggestionIdle', {
+							fileName: event.document.fileName,
+							idleSeconds: POST_AI_IDLE_THRESHOLD / 1000,
+						});
+						postAIIdleTimer = null; // Reset the timer variable after logging idle time
+					}, POST_AI_IDLE_THRESHOLD);
+
+					// Reset undo tracking
+                    undoCountSinceAI = 0;
+                    lastAIInsertionCharCount = charCount;
+                    trackingUndos = true;
+				}
+				else {
+					if(postAIIdleTimer) {
+						clearTimeout(postAIIdleTimer); // Clear the idle timer if the user makes another edit before the idle threshold is reached, indicating they are actively working and not idle	
+						postAIIdleTimer = null;
+						logTelemetry('postAIResumedEditing', {
+							fileName: event.document.fileName,
+						});
+					}
+
+					if(trackingUndos){
+						const isUndo = change.text === '' && change.rangeLength > 0; // Heuristic to identify undo actions based on the change being a deletion (empty text with a range length greater than 0)
+						if(isUndo){
+							undoCountSinceAI++;
+							logTelemetry('undoAfterAISuggestion', {
+								fileName: event.document.fileName,
+								undoCount: undoCountSinceAI,
+								removedChars: change.rangeLength,
+							});
+							if (change.rangeLength >= lastAIInsertionCharCount) {
+                                logTelemetry('aiSuggestionFullyReverted', {
+                                    fileName: event.document.fileName,
+                                    totalUndos: undoCountSinceAI,
+                                });
+                                trackingUndos = false;
+                                undoCountSinceAI = 0;
+                            }
+						}
+					}
+				}
+			}
 			totalEdits++;
 		})
 	);
@@ -40,6 +99,12 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 		})
 	);
 
+	context.subscriptions.push({
+		dispose: () => {
+			if (postAIIdleTimer) clearTimeout(postAIIdleTimer); // Clear the idle timer when the extension is deactivated to prevent any lingering timers from running after the extension is no longer active
+		}
+	});
+	
     return {
         getStats() {
             return {
@@ -48,6 +113,4 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
             };
         }
     };
-
-
 }
