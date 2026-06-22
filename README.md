@@ -1,6 +1,6 @@
 # CodexLog — VS Code Activity & Telemetry Extension
 
-Small extension that tracks editor activity (edits, saves, sessions) and logs telemetry for development and analytics.
+Small extension that tracks editor activity (edits, saves, AI suggestion outcomes, undo behavior, and active reading) and logs telemetry for development and analytics.
 
 ## Requirements
 
@@ -33,7 +33,8 @@ npm run watch
 ## Development notes
 
 - Source is under `src/`.
-- Activity tracking implemented in `src/activityTracker.ts` (tracks edits and saves).
+- Activity tracking implemented in `src/activityTracker.ts` (tracks edits, saves, likely AI suggestion acceptances, undo events after AI insertions, and active editing/resume state).
+- Runtime error tracking implemented in `src/runtimeTracker.ts` (executes supported files and logs runtime failures with stack traces).
 - Error tracking implemented in `src/errorTracking.ts` (captures console errors and stack traces, plus save-time diagnostics).
 - Telemetry helper is in `src/telemetry.ts` and `src/types.ts` holds `TelemetryEvent`.
 - Commands registered in `src/extension.ts` include `codexlog.logTelemetry` which shows a console summary.
@@ -41,9 +42,10 @@ npm run watch
 
 ## Current state (Unreleased)
 
-- Implemented activity tracking for text document edits and saves.
+- Implemented activity tracking for text document edits and saves, plus likely AI suggestion acceptance detection, undo tracking after AI suggestions, and post-AI active editing/resume state.
 - Added telemetry logging helper and shared telemetry type.
 - Registered a telemetry summary command for quick inspection.
+- Added runtime execution tracking in `src/runtimeTracker.ts` for supported Python, JavaScript, and TypeScript files.
 - Session tracking startup and GitHub Copilot detection are wired in.
 - Added error tracking support in `src/errorTracking.ts` to capture runtime errors, stack traces, and diagnostics from saved files.
 - Telemetry currently logs to the VS Code console (`console.log`) for development.
@@ -71,7 +73,7 @@ npm run watch
 
 - [CHANGELOG.md](CHANGELOG.md) — high-level release notes and progress.
 - `src/README` — quick local setup for contributing to the extension.
-- `src/activityTracker.ts`, `src/telemetry.ts`, `src/extension.ts`, `src/detectCopilot.ts`, `src/sessionTracker.ts`
+- `src/activityTracker.ts`, `src/runtimeTracker.ts`, `src/telemetry.ts`, `src/extension.ts`, `src/detectCopilot.ts`, `src/sessionTracker.ts`
 
 ## Contributing
 
