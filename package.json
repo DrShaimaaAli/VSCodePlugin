@@ -20,6 +20,10 @@
       {
         "command": "codexlog.logTelemetry",
         "title": "Log Telemetry"
+      },
+      {
+        "command": "codexlog.runAndTrack",
+        "title": "CodexLog: Run and Track Errors"
       }
     ]
   },

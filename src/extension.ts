@@ -5,6 +5,8 @@ import { startActivityTracking } from './activityTracker';
 import {isCopilotActive} from './detectCopilot';
 import {startSessionTracking} from './sessionTracker';
 import {startErrorTracking} from './errorTracking';
+import { runAndTrackErrors } from './runtimeTracker';
+import path from 'path/win32';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -31,6 +33,19 @@ export function activate(context: vscode.ExtensionContext) {
 	const tracker = startActivityTracking(context); // Start tracking user activity and logging telemetry data, passing the extension context for proper resource management
 
 	startErrorTracking(context); // Start tracking linter/compiler errors for opened files, logging diagnostics on save, passing the extension context for proper resource management
+
+	// Registering a new command to run user code and track runtime errors, allowing users to execute their code and capture any runtime stack traces for analysis
+	const runCommand = vscode.commands.registerCommand('codexlog.runAndTrack', () => {
+		const editor = vscode.window.activeTextEditor;
+ 		if (!editor) {
+			vscode.window.showWarningMessage('No active file to run.');
+			return;
+    	}
+		const { fileName, languageId } = editor.document;
+		vscode.window.showInformationMessage(`Running ${path.basename(fileName)}...`);
+		runAndTrackErrors(fileName, languageId);
+	});
+	context.subscriptions.push(runCommand);
 
 	// Registering a new command to log telemetry data, allowing users to view a summary of their editing activity
 	const summaryCommand = vscode.commands.registerCommand('codexlog.logTelemetry', () => {
