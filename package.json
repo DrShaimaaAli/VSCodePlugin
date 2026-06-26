@@ -24,6 +24,10 @@
       {
         "command": "codexlog.runAndTrack",
         "title": "CodexLog: Run and Track Errors"
+      },
+      {
+        "command": "codexlog.openLog",
+        "title": "Open Telemetry Log"
       }
     ]
   },

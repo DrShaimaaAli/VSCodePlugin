@@ -1,14 +1,10 @@
 // runtimeTracker.ts
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as os from 'os';
 import { exec } from 'child_process';
+import {execSync} from 'child_process';
 import { logTelemetry } from './telemetry';
-
-const RUNTIME_MAP: Record<string, string> = {
-    'py': 'python3',
-    'js': 'node',
-    'ts': 'ts-node',
-};
 
 interface StackFrame {
     file: string;
@@ -50,6 +46,31 @@ function parseStackTrace(stderr: string): {
     };
 }
 
+function getRuntimeCommand(extension: string): string | null { // checks if the runtime for the given file extension is available on the system PATH and returns the command to invoke it, or null if not found
+    const isWindows = os.platform() === 'win32';
+
+    const candidates: Record<string, string[]> = {
+        'py': isWindows ? ['python', 'python3'] : ['python3', 'python'],
+        'js': ['node'],
+        'ts': ['ts-node'],
+    };
+
+    const options = candidates[extension];
+    if (!options) return null;
+
+    // Try each candidate and return the first one that exists on PATH
+    for (const cmd of options) {
+        try {
+            execSync(`${cmd} --version`, { stdio: 'ignore' });
+            return cmd; // this one works
+        } catch {
+            continue; // not found, try next
+        }
+    }
+
+    return null; // nothing found
+}
+
 export function runAndTrackErrors(filePath: string, language: string) {
     if (!fs.existsSync(filePath)) {
         logTelemetry('runtimeSkipped', { reason: 'file not found', filePath });
@@ -57,9 +78,18 @@ export function runAndTrackErrors(filePath: string, language: string) {
     }
 
     const extension = filePath.split('.').pop() ?? '';
-    const runtime = RUNTIME_MAP[extension];
+    const runtime = getRuntimeCommand(extension);
     if (!runtime) {
-        logTelemetry('runtimeUnsupported', { filePath, extension });
+        // Specific message for missing Python on Windows
+        logTelemetry('runtimeUnsupported', {
+            filePath,
+            extension,
+            reason: 'runtime not found on PATH',
+            platform: os.platform(),
+        });
+        vscode.window.showErrorMessage(
+            `No runtime found for .${extension} files. Make sure Python is installed and added to PATH.`
+        );
         return;
     }
 

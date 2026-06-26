@@ -12,7 +12,9 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - Added error tracking in `src/errorTracking.ts` to capture runtime errors and stack traces from the extension environment
 - Registered a telemetry summary command `codexlog.logTelemetry` in `src/extension.ts`
 - Added session tracking startup and GitHub Copilot detection using `src/sessionTracker.ts` and `src/detectCopilot.ts`
-- Current telemetry output is logged to the VS Code console for development/inspection
+- **Implemented comprehensive stack trace capture** across runtime errors, console errors, and execution failures with full context including line numbers, file paths, and function names
+- **Added JSON file logging for telemetry events**, enabling persistent local storage of all telemetry data, activity logs, and error tracking for offline analysis and debugging
+- Telemetry output now supports both VS Code console logging for development and JSON file logging for production use
 
 ### Next steps
 

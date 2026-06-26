@@ -4,5 +4,5 @@
 export interface TelemetryEvent {
     event: string; // The name of the telemetry event, used for categorization and analysis
     timestamp: string; // The ISO string representation of the event's occurrence time, useful for time-based analysis
-    data: any; // Additional data associated with the event, which can include details about the user's actions or environment
+    data: Record<string, any>; // Additional data associated with the event, which can include details about the user's actions or environment
 }

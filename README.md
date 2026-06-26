@@ -34,9 +34,11 @@ npm run watch
 
 - Source is under `src/`.
 - Activity tracking implemented in `src/activityTracker.ts` (tracks edits, saves, likely AI suggestion acceptances, undo events after AI insertions, and active editing/resume state).
-- Runtime error tracking implemented in `src/runtimeTracker.ts` (executes supported files and logs runtime failures with stack traces).
-- Error tracking implemented in `src/errorTracking.ts` (captures console errors and stack traces, plus save-time diagnostics).
+- Runtime error tracking implemented in `src/runtimeTracker.ts` (executes supported files and logs runtime failures with detailed stack traces).
+- Error tracking implemented in `src/errorTracking.ts` (captures console errors with full stack traces, plus save-time diagnostics).
+- **Stack trace implementation**: Full stack trace capture across runtime errors, console errors, and execution failures with line numbers, file paths, and function names for comprehensive debugging.
 - Telemetry helper is in `src/telemetry.ts` and `src/types.ts` holds `TelemetryEvent`.
+- **JSON file logging**: Telemetry events are logged to JSON files for persistent storage and analysis, enabling detailed session history and event tracking.
 - Commands registered in `src/extension.ts` include `codexlog.logTelemetry` which shows a console summary.
 - Copilot detection is implemented in `src/detectCopilot.ts` and session tracking is started via `src/sessionTracker.ts`.
 
@@ -47,8 +49,10 @@ npm run watch
 - Registered a telemetry summary command for quick inspection.
 - Added runtime execution tracking in `src/runtimeTracker.ts` for supported Python, JavaScript, and TypeScript files.
 - Session tracking startup and GitHub Copilot detection are wired in.
+- Added comprehensive stack trace implementation to capture runtime errors, console errors, and diagnostic stack traces with full context.
 - Added error tracking support in `src/errorTracking.ts` to capture runtime errors, stack traces, and diagnostics from saved files.
-- Telemetry currently logs to the VS Code console (`console.log`) for development.
+- Implemented JSON file logging for telemetry events, enabling persistent local storage of all activity and event data.
+- Telemetry logs to both VS Code console (`console.log`) and JSON files for development and production use.
 
 ## Next steps (planned)
 
