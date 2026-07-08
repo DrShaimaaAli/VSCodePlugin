@@ -3,37 +3,33 @@
 import { TelemetryEvent } from "./types";
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 
+// Define the directory and file path for storing telemetry logs
+let LOG_FILE: string | null = null;
 
-// Store log file in the user's home directory under a dedicated folder
-// This ensures it's always writable regardless of where the extension is installed
-const LOG_DIR = path.join(os.homedir(), '.codexlog');
-const LOG_FILE = path.join(LOG_DIR, 'telemetry.json');
-
-function ensureLogFiles(){
-	// Create the directory if it doesn't exist
-	if (!fs.existsSync(LOG_DIR)) {
-		fs.mkdirSync(LOG_DIR, { recursive: true });
-	}
-	// Create the file with an empty array if it doesn't exist
-	if (!fs.existsSync(LOG_FILE)) {
-		fs.writeFileSync(LOG_FILE, JSON.stringify([], null, 2), 'utf-8');
-	}
+// Initialize the telemetry logging system by setting up the log file path and ensuring the necessary directories exist
+export function initTelemetry(storagePath: string) {
+	if (!fs.existsSync(storagePath)) {
+		fs.mkdirSync(storagePath, { recursive: true });
+  	}
+    LOG_FILE = path.join(storagePath, 'telemetry.json');
+    if (!fs.existsSync(LOG_FILE)) {
+        fs.writeFileSync(LOG_FILE, '[]', 'utf-8');
+    }
 }
 
 function readEvents(): TelemetryEvent[] {
-	try {
-		const raw = fs.readFileSync(LOG_FILE, 'utf-8');
-		return JSON.parse(raw) as TelemetryEvent[];
-	} catch {
-		// If the file doesn't exist or is corrupted, return an empty array
-		return [];
-	}
+ 	if (!LOG_FILE) return [];
+    try {
+        const raw = fs.readFileSync(LOG_FILE, 'utf-8');
+        return JSON.parse(raw) as TelemetryEvent[];
+    } catch {
+        return [];
+    }
 }
 
 function appendEvent(event: TelemetryEvent) {
-    // Read current content, strip the closing ], append new entry, re-close
+    if (!LOG_FILE) return;
     const raw = fs.readFileSync(LOG_FILE, 'utf-8').trim();
     const isFirstEntry = raw === '[]';
     const newEntry = JSON.stringify(event, null, 2);
@@ -53,14 +49,18 @@ export 	function logTelemetry(eventName: string, data: any) {
 	};
 	console.log('Telemetry Event:', JSON.stringify(payload));
 
-	try {
-		ensureLogFiles();
-		appendEvent(payload);
-	} catch(error) {
-		console.error('Failed to log telemetry event:', error);
-	}
+    if (!LOG_FILE) {
+        console.warn('Telemetry not initialised — call initTelemetry() first.');
+        return;
+    }
+
+    try {
+        appendEvent(payload);
+    } catch (error) {
+        console.error('Failed to log telemetry event:', error);
+    }
 }
 
-export function getLogFilePath(): string {
+export function getLogFilePath(): string | null {
 	return LOG_FILE;
 }
