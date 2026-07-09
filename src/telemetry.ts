@@ -3,6 +3,7 @@
 import { TelemetryEvent } from "./types";
 import * as fs from 'fs';
 import * as path from 'path';
+import * as vscode from 'vscode';
 
 // Define the directory and file path for storing telemetry logs
 let LOG_FILE: string | null = null;
@@ -18,7 +19,7 @@ export function initTelemetry(storagePath: string) {
     }
 }
 
-function readEvents(): TelemetryEvent[] {
+function readEvents(): TelemetryEvent[] { // Read the existing telemetry events from the log file, returning an empty array if the file doesn't exist or if there's an error reading it
  	if (!LOG_FILE) return [];
     try {
         const raw = fs.readFileSync(LOG_FILE, 'utf-8');
@@ -63,4 +64,15 @@ export 	function logTelemetry(eventName: string, data: any) {
 
 export function getLogFilePath(): string | null {
 	return LOG_FILE;
+}
+
+// Single source of truth for "is this document our own telemetry log?".
+// Any listener on workspace/document events (onDidChangeTextDocument,
+// onDidSaveTextDocument, onDidOpenTextDocument, etc.) should call this first
+// and bail out if it returns true. Otherwise, opening the log via
+// codexlog.openLog causes writes to the log to be picked up as external file
+// changes, which get treated as user activity/AI-suggestion events, which get
+// logged, which triggers another change — an infinite feedback loop.
+export function isTelemetryLogDocument(uri: vscode.Uri): boolean {
+	return LOG_FILE !== null && uri.fsPath === LOG_FILE;
 }

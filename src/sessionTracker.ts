@@ -5,7 +5,7 @@
 // active coding time
 // idle time
 import * as vscode from 'vscode'; // This gives access to: editor events, documents, commands, windows, workspace, APIs
-import {logTelemetry} from './telemetry';
+import {logTelemetry, isTelemetryLogDocument} from './telemetry';
 export function startSessionTracking (context: vscode.ExtensionContext) {
     const sessionStart = Date.now();
     let activeCodingTime = 0; // Time spent actively coding (not idle)
@@ -28,7 +28,12 @@ export function startSessionTracking (context: vscode.ExtensionContext) {
         } 
     }
 
-    const testListener = vscode.workspace.onDidChangeTextDocument(() => registerActivity()); // Listen for text document changes to detect coding activity
+    const testListener = vscode.workspace.onDidChangeTextDocument((event) => {
+        if (isTelemetryLogDocument(event.document.uri)) {
+            return; // Ignore changes to the telemetry log file itself — otherwise, if the user has opened it via codexlog.openLog, every appended log entry shows up as an external file change, gets misread as a large AI-style insertion, and gets logged as another event, which triggers another change, forever.
+        }
+        registerActivity();
+    });
     context.subscriptions.push(testListener); // Ensure the listener is disposed of when the extension is deactivated
 
     const idleChecker = setInterval(() => { // Set up an interval to check for idle time

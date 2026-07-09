@@ -1,7 +1,7 @@
 // This file contains the main logic for the VSCode extension, including event listeners for tracking user activity and logging telemetry data
 
 import * as vscode from 'vscode'; // This gives access to: editor events, documents, commands, windows, workspace, APIs
-import { logTelemetry } from './telemetry'; // Importing the logTelemetry function to use for logging telemetry events
+import { logTelemetry, isTelemetryLogDocument} from './telemetry'; // Importing the logTelemetry function to use for logging telemetry events
 
 let totalEdits = 0; // Global variable to track total edits across all documents
 let totalSaves = 0; // Global variable to track total saves across all documents
@@ -21,6 +21,14 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		// Triggers telemetry logging when a text document is changed, capturing details about the change for analysis
 		vscode.workspace.onDidChangeTextDocument((event) => {
+			// Ignore changes to the telemetry log file itself — otherwise, if the user has
+			// opened it via codexlog.openLog, every appended log entry shows up as an
+			// external file change, gets misread as a large AI-style insertion, and gets
+			// logged as another event, which triggers another change, forever.
+			if (isTelemetryLogDocument(event.document.uri)) {
+				return;
+			}
+			
 			for (const change of event.contentChanges) {
 				const insertedText = change.text;
 				const lineCount = insertedText.split('\n').length;

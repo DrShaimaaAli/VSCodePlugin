@@ -93,7 +93,7 @@ export function runAndTrackErrors(filePath: string, language: string) {
         return;
     }
 
-    exec(`${runtime} "${filePath}"`, { timeout: 5000 }, (error, stdout, stderr) => {
+    exec(`"${runtime}" "${filePath}"`, { timeout: 5000 }, (error, stdout, stderr) => {
         if (error?.killed) {
             logTelemetry('runtimeTimeout', { filePath, timeoutMs: 5000 });
             return;

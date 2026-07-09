@@ -1,7 +1,7 @@
 // Tracks linter/compiler errors (diagnostics) for files opened during this session,
 // logging a snapshot of error diagnostics each time the user saves.
 import * as vscode from 'vscode';
-import { logTelemetry } from './telemetry';
+import { logTelemetry, isTelemetryLogDocument} from './telemetry';
 
 export function startErrorTracking(context: vscode.ExtensionContext) {
     // Track URIs of filed opened during this session to know which files to monitor for diagnostics
@@ -10,6 +10,9 @@ export function startErrorTracking(context: vscode.ExtensionContext) {
     // Register newly opened files (track both saved files and untitled editors)
     const openListener = vscode.workspace.onDidOpenTextDocument(document => {
         if (document.uri.scheme !== 'file' && document.uri.scheme !== 'untitled') {
+            return;
+        }
+        if (isTelemetryLogDocument(document.uri)) {
             return;
         }
         trackedFiles.add(document.uri.toString());
@@ -21,6 +24,9 @@ export function startErrorTracking(context: vscode.ExtensionContext) {
     const saveListener = vscode.workspace.onDidSaveTextDocument(document => {
         // Only consider real files and saved untitled editors
         if (document.uri.scheme !== 'file' && document.uri.scheme !== 'untitled') {
+            return;
+        }
+        if (isTelemetryLogDocument(document.uri)) {
             return;
         }
 
@@ -56,13 +62,13 @@ export function startErrorTracking(context: vscode.ExtensionContext) {
                 }
             }))
         });
-        });
+    });
         
-        context.subscriptions.push(saveListener);
+    context.subscriptions.push(saveListener);
 
-        // When a file is closed, stop tracking it to avoid memory leaks and unnecessary telemetry logging for files no longer in use
-        const closeListener = vscode.workspace.onDidCloseTextDocument(document => {
-            trackedFiles.delete(document.uri.toString()); // Stop tracking files that are closed to avoid memory leaks
-        });
-        context.subscriptions.push(closeListener);
+    // When a file is closed, stop tracking it to avoid memory leaks and unnecessary telemetry logging for files no longer in use
+    const closeListener = vscode.workspace.onDidCloseTextDocument(document => {
+        trackedFiles.delete(document.uri.toString()); // Stop tracking files that are closed to avoid memory leaks
+    });
+    context.subscriptions.push(closeListener);
 }
