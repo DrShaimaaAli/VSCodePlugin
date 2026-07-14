@@ -1,6 +1,56 @@
 # CodexLog — VS Code Activity & Telemetry Extension
 
-Small extension that tracks editor activity (edits, saves, AI suggestion outcomes, undo behavior, and active reading) and logs telemetry for development and analytics.
+CodexLog is a VS Code extension for collecting structured coding activity telemetry in a format inspired by ProgSnap2. The goal is to standardize event logging so that editor behavior can be analyzed more easily, linked to CUPS-style state transitions, and used to generate AI-personalized feedback.
+
+## What has changed
+
+- Telemetry is now modeled as a standardized event stream rather than ad-hoc logging.
+- Events follow a ProgSnap2-inspired structure, making them easier to compare, analyze, and export.
+- The logging pipeline is designed to be connected to a CUPS state diagram so that behavior can be interpreted as state transitions rather than isolated actions.
+- The same telemetry stream will later be used to build prompts for AI-driven, personalized feedback about coding habits, debugging behavior, and AI-assistance usage.
+
+## Telemetry format
+
+Each recorded interaction is stored as a structured JSON event with consistent fields such as:
+
+- Event ID and session identifiers
+- Event type and subtype
+- Client and server timestamps
+- Source location and file context
+- Code state and programmer state information
+- Optional metadata such as edit type, execution result, error reason, or AI-assistance outcome
+
+This makes the logs suitable for:
+
+- standardized analysis across sessions
+- comparison of coding behavior over time
+- downstream integration with state-based models
+- prompt generation for feedback systems
+
+## CUPS state integration
+
+The telemetry stream is intended to be linked to a CUPS-style state diagram that captures higher-level programmer behavior, including:
+
+- writing new code
+- editing existing code
+- debugging or handling errors
+- testing or running code
+- idle or pause states
+- AI-assisted coding interactions
+
+By tying individual events to these states, the system can describe not just what happened, but also the context in which it happened.
+
+## AI-personalized feedback
+
+The long-term purpose of this telemetry format is to provide the information needed to create prompts for AI-generated feedback. Those prompts can combine:
+
+- recent event history
+- state transitions
+- error and recovery patterns
+- AI suggestion acceptance or rejection behavior
+- session-level activity summaries
+
+This allows feedback to be grounded in actual coding behavior rather than generic guidance.
 
 ## Requirements
 
@@ -33,56 +83,34 @@ npm run watch
 ## Development notes
 
 - Source is under `src/`.
-- Activity tracking implemented in `src/activityTracker.ts` (tracks edits, saves, likely AI suggestion acceptances, undo events after AI insertions, and active editing/resume state).
-- Runtime error tracking implemented in `src/runtimeTracker.ts` (executes supported files and logs runtime failures with detailed stack traces).
-- Error tracking implemented in `src/errorTracking.ts` (captures console errors with full stack traces, plus save-time diagnostics).
-- **Stack trace implementation**: Full stack trace capture across runtime errors, console errors, and execution failures with line numbers, file paths, and function names for comprehensive debugging.
-- Telemetry helper is in `src/telemetry.ts` and `src/types.ts` holds `TelemetryEvent`.
-- **JSON file logging**: Telemetry events are logged to JSON files for persistent storage and analysis, enabling detailed session history and event tracking.
-- Commands registered in `src/extension.ts` include `codexlog.logTelemetry` which shows a console summary.
-- Copilot detection is implemented in `src/detectCopilot.ts` and session tracking is started via `src/sessionTracker.ts`.
+- Activity tracking is implemented in `src/activityTracker.ts` and captures edits, saves, AI suggestion outcomes, undo behavior, and active editing state.
+- Runtime execution tracking is implemented in `src/runtimeTracker.ts` for supported Python, JavaScript, and TypeScript files.
+- Error tracking is implemented in `src/errorTracking.ts` and captures runtime failures, console errors, and diagnostics.
+- Telemetry logging is centralized in `src/telemetry.ts`, and the shared schema lives in `src/types.ts`.
+- Events are persisted as JSON for local storage and later analysis.
+- Session tracking and Copilot detection are wired in through `src/sessionTracker.ts` and `src/detectCopilot.ts`.
+- The extension also registers a telemetry summary command in `src/extension.ts` for quick inspection.
 
-## Current state (Unreleased)
+## Current state
 
-- Implemented activity tracking for text document edits and saves, plus likely AI suggestion acceptance detection, undo tracking after AI suggestions, and post-AI active editing/resume state.
-- Added telemetry logging helper and shared telemetry type.
-- Registered a telemetry summary command for quick inspection.
-- Added runtime execution tracking in `src/runtimeTracker.ts` for supported Python, JavaScript, and TypeScript files.
-- Session tracking startup and GitHub Copilot detection are wired in.
-- Added comprehensive stack trace implementation to capture runtime errors, console errors, and diagnostic stack traces with full context.
-- Added error tracking support in `src/errorTracking.ts` to capture runtime errors, stack traces, and diagnostics from saved files.
-- Implemented JSON file logging for telemetry events, enabling persistent local storage of all activity and event data.
-- Telemetry logs to both VS Code console (`console.log`) and JSON files for development and production use.
-
-## Next steps (planned)
-
-1. Transport: send telemetry to a backend analytics server for dashboarding.
-   - Use secure HTTPS endpoints, API key or token authentication, and respect user privacy.
-   - Implement batching, backoff/retry, and local buffering to prevent data loss.
-
-2. Payload & dashboard: define backend-friendly event schemas and key metrics (edits/day, saves/day, active session length).
-
-3. Privacy & consent: add an opt-in flow before sending production telemetry; document data collected and retention.
-
-4. Tests & CI: add unit tests for telemetry formatting and integration tests for transport logic.
-
-## How to implement the telemetry backend (short guide)
-
-- Endpoint: POST /telemetry with JSON payloads over TLS.
-- Authentication: use an API key or token stored in environment or VS Code secret storage.
-- Reliability: batch events (e.g. 50 or 5s), retry with exponential backoff, and persist unsent events to disk.
-- Security & privacy: hash or omit personally-identifying fields; expose a setting to opt out and to clear stored telemetry.
+- Activity tracking for edits, saves, AI-suggestion acceptance/reversion, and post-AI editing behavior is in place.
+- Structured telemetry events are being logged in a ProgSnap2-inspired schema.
+- The event format is being prepared for integration with CUPS-style state modeling.
+- The logging pipeline is being positioned as the foundation for AI-generated personalized feedback prompts.
 
 ## Files of interest
 
 - [CHANGELOG.md](CHANGELOG.md) — high-level release notes and progress.
-- `src/README` — quick local setup for contributing to the extension.
-- `src/activityTracker.ts`, `src/runtimeTracker.ts`, `src/telemetry.ts`, `src/extension.ts`, `src/detectCopilot.ts`, `src/sessionTracker.ts`
+- `src/activityTracker.ts`
+- `src/runtimeTracker.ts`
+- `src/errorTracking.ts`
+- `src/telemetry.ts`
+- `src/types.ts`
+- `src/extension.ts`
+- `src/detectCopilot.ts`
+- `src/sessionTracker.ts`
 
 ## Contributing
 
-- Follow the repo setup steps above.
-- Open an issue for design decisions or telemetry schema changes.
-
----
-This README was updated to reflect current development progress and next steps for adding backend telemetry and dashboarding.
+- Follow the setup steps above.
+- Open an issue if you want to discuss schema changes, state-model integration, or feedback-prompt design.

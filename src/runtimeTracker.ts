@@ -5,13 +5,15 @@ import * as os from 'os';
 import { exec } from 'child_process';
 import {execSync} from 'child_process';
 import { logTelemetry } from './telemetry';
+import { stderr } from 'process';
+// import * as cups from './cupsStateTracker';
 
 interface StackFrame {
     file: string;
     line: number;
     functionName: string;
     code: string;
-}
+} 
 
 function parseStackTrace(stderr: string): {
     frames: StackFrame[];
@@ -20,9 +22,10 @@ function parseStackTrace(stderr: string): {
     raw: string;
 } {
     const lines = stderr.split('\n').map(l => l.trim());
-    const frames: StackFrame[] = [];
-    const framePattern = /File "(.+)", line (\d+), in (.+)/;
+    const frames: StackFrame[] = []; // Initialize the frames array
+    const framePattern = /File "(.+)", line (\d+), in (.+)/; // Pattern to match Python stack trace lines like: File "script.py", line 10, in <module>
 
+    // Iterate through the lines and extract stack frames
     for (let i = 0; i < lines.length; i++) {
         const match = lines[i].match(framePattern);
         if (match) {
@@ -72,8 +75,9 @@ function getRuntimeCommand(extension: string): string | null { // checks if the 
 }
 
 export function runAndTrackErrors(filePath: string, language: string) {
+    const relFile = vscode.workspace.asRelativePath(filePath, false);
     if (!fs.existsSync(filePath)) {
-        logTelemetry('runtimeSkipped', { reason: 'file not found', filePath });
+        logTelemetry('Run.Program', null, { reason: 'file not found'}, { file: relFile, language, executionResult: 'Error'});
         return;
     }
 
@@ -81,12 +85,12 @@ export function runAndTrackErrors(filePath: string, language: string) {
     const runtime = getRuntimeCommand(extension);
     if (!runtime) {
         // Specific message for missing Python on Windows
-        logTelemetry('runtimeUnsupported', {
-            filePath,
-            extension,
-            reason: 'runtime not found on PATH',
-            platform: os.platform(),
-        });
+        logTelemetry(
+            'Run.Program',
+            null,
+            {reason: 'runtime not found on PATH', extension, platform: os.platform()},
+            {file: relFile, language, executionResult: 'Error'}
+        );
         vscode.window.showErrorMessage(
             `No runtime found for .${extension} files. Make sure Python is installed and added to PATH.`
         );
@@ -95,26 +99,36 @@ export function runAndTrackErrors(filePath: string, language: string) {
 
     exec(`"${runtime}" "${filePath}"`, { timeout: 5000 }, (error, stdout, stderr) => {
         if (error?.killed) {
-            logTelemetry('runtimeTimeout', { filePath, timeoutMs: 5000 });
+            const event = logTelemetry('Run.Program', null, { reason: 'timeout' }, { file: relFile, language, executionResult: 'Timeout' });
+            // cups.onRunOrCompileError(relFile, event.EventID, event.ClientTimestamp);
             return;
         }
 
         if (!error) {
-            logTelemetry('runtimeSuccess', { filePath, language });
+            const event = logTelemetry('Run.Program', null, { reason: 'success' }, { file: relFile, language, executionResult: 'Success' });
+            // cups.onRunOrCompileError(relFile, event.EventID, event.ClientTimestamp); // running to test is still 'testing', success or not
             return;
         }
 
         const { frames, errorType, errorMessage, raw } = parseStackTrace(stderr);
+        const firstFrame = frames[0] ?? null;
 
-        logTelemetry('runtimeError', {
-            filePath,
-            language,
-            exitCode: error.code,
-            errorType,
-            errorMessage,
-            frameCount: frames.length,
-            stackFrames: frames,
-            rawStderr: raw,
-        });
+        const event = logTelemetry('Run.Program', null,
+            {
+                exitCode: error.code,
+                errorType,
+                errorMessage,
+                frameCount: frames.length,
+                stackFrames: frames,
+                rawStderr: raw,
+            },
+            { 
+                file: relFile, 
+                language, 
+                executionResult: 'Error' , 
+                sourceLocation: firstFrame ? {startLine: firstFrame.line} : undefined
+            }
+        );
+        // cups.onRunOrCompileError(relFile, event.EventID, event.ClientTimestamp);
     });
 }
