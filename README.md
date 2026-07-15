@@ -114,19 +114,58 @@ npm run compile
 
 ## Testing the extension
 
-Once the Extension Development Host is running, you can generate sample telemetry by:
+Once the Extension Development Host is running, you can exercise the full telemetry flow with the steps below.
 
-1. Opening or editing a file in the development host.
-2. Saving the file to trigger a save event.
-3. Running or compiling a supported script to trigger execution-related telemetry.
-4. Using the Command Palette to run the telemetry-related commands.
+### 1. File save and file close
 
-To inspect the recorded data, use:
+- Open or create a text file in the development host.
+- Type a few changes and save the file.
+- This should log a File.Save event and increment the save count shown by the telemetry summary.
+- Close the tab or document.
+- This should log a File.Close event.
 
-- Open Telemetry Log to view the generated log file.
-- CodexLog: Log Telemetry to see a quick summary in the UI.
+### 2. Error tracker
 
-The telemetry output is written to the extension storage area and can be used for local inspection or later analysis.
+- Open a file that can produce diagnostics, such as a Python or TypeScript file with an obvious syntax or runtime error.
+- Save the file after introducing the error.
+- The extension should log:
+  - File.Open
+  - X-Error.Introduced
+  - Compile
+  - X-Error.Persisted on later saves if the error remains
+- Fix the error and save again.
+- The extension should log X-Error.Resolved when the diagnostic disappears.
+
+### 3. Runtime tracker / debug execution
+
+- Open a supported script such as a Python, JavaScript, or TypeScript file.
+- Run the command CodexLog: Run and Track Errors from the Command Palette.
+- The extension will attempt to execute the file and log a Run.Program event.
+- If the file throws an error, the event will include stack trace details.
+- If the runtime is missing, the extension will log a runtime-not-found error and show a warning message.
+
+### 4. Idle time tracking
+
+- Leave the Extension Development Host window idle for more than 2 minutes.
+- The session tracker should log an X-Session.Idle.Start event once the idle threshold is reached.
+- Resume activity by typing or editing again.
+- The tracker should then log X-Session.Idle.End and resume normal session tracking.
+
+### 5. AI suggestion acceptance and revert
+
+- In an editor, insert a large block of text as a single insertion (for example, 3 or more lines and 50+ characters).
+- This should be treated as a likely AI suggestion and logged as X-AI.Suggestion.Accepted.
+- Wait about 30 seconds after the accepted suggestion without further edits.
+- The extension should log X-AI.Suggestion.Idle.
+- Immediately after the acceptance, use Undo on the inserted block.
+- If the undo targets the suggestion range, the extension should log X-AI.Suggestion.Reverted as either Full or Partial.
+
+### 6. Session and summary commands
+
+- Use the command CodexLog: Log Telemetry to view a quick summary of total edits and saves.
+- Use Open Telemetry Log to view the generated JSON telemetry log directly.
+
+The telemetry output is written to the extension storage area and can be inspected locally for analysis or debugging.
 
 ## Development notes
 
