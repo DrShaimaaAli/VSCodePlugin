@@ -6,12 +6,11 @@
 // idle time
 import * as vscode from 'vscode'; // This gives access to: editor events, documents, commands, windows, workspace, APIs
 import {logTelemetry, isTelemetryLogDocument} from './telemetry';
-// import * as cups from './cupsStateTracker';
+import * as cups from './CupsStateTracker';
 
 export function startSessionTracking (context: vscode.ExtensionContext) {
     const sessionStart = Date.now();
     let activeCodingTime = 0; // Time spent actively coding (not idle)
-    let idleTime = 0; // Time spent idle (no activity detected)
     let lastActivityTime = Date.now(); // Timestamp of the last detected activity, used to calculate idle time
     let isIdle = false; // Flag to indicate whether the user is currently idle, helps in determining when to start and stop idle time tracking
     let idleStartEventId: string | null = null; // EventID for the start of the idle period, used to log when the user becomes idle
@@ -22,19 +21,21 @@ export function startSessionTracking (context: vscode.ExtensionContext) {
 
     function registerActivity() { // Function to register user activity, updating active coding time and resetting idle time tracking
         const now = Date.now();
-        activeCodingTime += now - lastActivityTime; // Update active coding time by adding the time since the last activity
-        lastActivityTime = now;
+
         if (isIdle) { // If the user was previously idle, log the idle time and reset the idle flag
-            logTelemetry('X-Session.Idle.End', null,{duration: idleTime},
+            const actualIdleDurationMs = now - lastActivityTime;
+            logTelemetry('X-Session.Idle.End', null,{duration: actualIdleDurationMs, durationMinutes: Math.round((actualIdleDurationMs / 60000) * 100) / 100},
                 {
                     parentEventId:idleStartEventId ?? undefined,
                     initiator: 'ToolTimedEvent'
                 }
             );
-            idleTime = 0;
             isIdle = false;
             idleStartEventId = null;
-        } 
+        } else {
+            activeCodingTime += now - lastActivityTime;
+        }
+        lastActivityTime = now;
     }
 
     const testListener = vscode.workspace.onDidChangeTextDocument((event) => {
@@ -52,7 +53,8 @@ export function startSessionTracking (context: vscode.ExtensionContext) {
             isIdle = true;
             const event = logTelemetry('X-Session.Idle.Start', null, {idleMinutes: Math.floor(idleDuration / 60000)}, {initiator: 'ToolTimedEvent'}); // Log the start of idle time for analysis
             idleStartEventId = event.EventID;
-            // cups.onIdleStart(event.EventID, event.ClientTimestamp); // Notify the CUPS state tracker that the user has become idle, allowing it to update its state accordingly
+            
+            cups.onIdleOrFocusLost(event.EventID, event.ClientTimestamp); // Notify the CUPS state tracker that the user has become idle, allowing it to update its state accordingly
         }
     }, 10000); // Check every 10 seconds
     context.subscriptions.push({ dispose: () => clearInterval(idleChecker) }); // Ensure the idle checker interval is cleared when the extension is deactivated
@@ -62,8 +64,13 @@ export function startSessionTracking (context: vscode.ExtensionContext) {
     context.subscriptions.push(folderListener); // Listen for changes in workspace folders to log when workspaces are added or removed
 
     function endSession() {
-        // cups.closeCurrentState();
-        const totalTime = Date.now() - sessionStart; // Calculate the total session duration from the start time to the current time
+        cups.closeCurrentState();
+        const now = Date.now();
+        if (!isIdle) {
+            activeCodingTime += now - lastActivityTime;
+        }
+
+        const totalTime = now - sessionStart; // Calculate the total session duration from the start time to the current time
         logTelemetry("Session.End", null, {durationMinutes: Math.floor(totalTime / 60000), activeCodingMinutes: Math.floor(activeCodingTime / 60000), idleMinutes: Math.floor((totalTime - activeCodingTime) / 60000)});
     }
 
