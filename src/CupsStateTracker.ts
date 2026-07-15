@@ -58,7 +58,7 @@ export function onEditDuringOrAfterSuggestion(file: string, eventId: string, tim
 
 // Rule: a plain typed edit with no AI context nearby is just ... writing code.
 export function onGenericEdit(file: string, eventId: string, time: string) {
-    if (current?.state === 'DebugginTesting') {
+    if (current?.state === 'DebuggingTesting') {
         return; // a stray edit mid-debug doesn't necessarily end debugging
     }
     transition('WritingNewCode', file, eventId, time);
