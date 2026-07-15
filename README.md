@@ -60,25 +60,73 @@ This allows feedback to be grounded in actual coding behavior rather than generi
 
 ## Quick setup
 
-1. Clone the repository and install dependencies:
+### Run it from GitHub
+
+1. Fork or clone the repository from GitHub:
 
 ```bash
 git clone <repo-url>
 cd VSCodePlugin
+```
+
+2. Install the required tools:
+
+- Node.js 18+ 
+- npm
+- Visual Studio Code
+
+3. Install dependencies:
+
+```bash
 npm install
 ```
 
-2. Open the project in VS Code and run the extension host (F5):
+4. Open the project in VS Code:
 
 ```bash
 code .
 ```
 
-3. Use the live-watch build during development:
+5. Start the extension in debug mode:
+
+- Press F5, or
+- Open Run and Debug and choose Run Extension within the extension.ts file
+
+This launches a new Extension Development Host window where the plugin is active.
+
+6. In the new window, use the Command Palette to run the available CodexLog commands such as:
+
+- CodexLog: Log Telemetry
+- CodexLog: Run and Track Errors
+- Open Telemetry Log
+
+7. During development, keep the TypeScript build watching:
 
 ```bash
 npm run watch
 ```
+
+If you want to verify that the extension compiles successfully before launching it, run:
+
+```bash
+npm run compile
+```
+
+## Testing the extension
+
+Once the Extension Development Host is running, you can generate sample telemetry by:
+
+1. Opening or editing a file in the development host.
+2. Saving the file to trigger a save event.
+3. Running or compiling a supported script to trigger execution-related telemetry.
+4. Using the Command Palette to run the telemetry-related commands.
+
+To inspect the recorded data, use:
+
+- Open Telemetry Log to view the generated log file.
+- CodexLog: Log Telemetry to see a quick summary in the UI.
+
+The telemetry output is written to the extension storage area and can be used for local inspection or later analysis.
 
 ## Development notes
 
