@@ -1,134 +1,168 @@
 // runtimeTracker.ts
 import * as vscode from 'vscode';
-import * as fs from 'fs';
-import * as os from 'os';
-import { exec } from 'child_process';
-import {execSync} from 'child_process';
 import { logTelemetry } from './telemetry';
-import { stderr } from 'process';
-// import * as cups from './cupsStateTracker';
+import * as cups from './cupsStateTracker';
 
 interface StackFrame {
     file: string;
     line: number;
+    column: number;
     functionName: string;
     code: string;
-} 
+}
 
-function parseStackTrace(stderr: string): {
-    frames: StackFrame[];
+interface CapturedException {
     errorType: string;
     errorMessage: string;
-    raw: string;
-} {
-    const lines = stderr.split('\n').map(l => l.trim());
-    const frames: StackFrame[] = []; // Initialize the frames array
-    const framePattern = /File "(.+)", line (\d+), in (.+)/; // Pattern to match Python stack trace lines like: File "script.py", line 10, in <module>
+    stackFrames: StackFrame[];
+    rawStackTrace: string;
+}
 
-    // Iterate through the lines and extract stack frames
-    for (let i = 0; i < lines.length; i++) {
-        const match = lines[i].match(framePattern);
-        if (match) {
-            frames.push({
-                file: match[1],
-                line: parseInt(match[2]),
-                functionName: match[3],
-                code: lines[i + 1] ?? '',
-            });
+// Maps active debug session IDs to their captured exceptions
+const sessionExceptions = new Map<string, CapturedException>();
+
+/**
+ * Custom Debug Adapter Tracker that programmatically queries the debugger
+ * when it encounters an uncaught runtime crash.
+ */
+class ProgrammaticErrorTracker implements vscode.DebugAdapterTracker {
+    constructor(private session: vscode.DebugSession) {}
+
+    async onDidSendMessage(message: any): Promise<void> {
+        // Detect when the debugger hits a stop event
+        if (message.type === 'event' && message.event === 'stopped') {
+            const { reason, threadId } = message.body || {};
+
+            // If the process stopped due to an unhandled exception, query it!
+            if (reason === 'exception' && threadId !== undefined) {
+                await this.captureExceptionDetails(threadId);
+            }
         }
     }
 
-    const lastLine = lines.filter(l => l.length > 0).pop() ?? '';
-    const [errorType, ...rest] = lastLine.split(':');
-
-    return {
-        frames,
-        errorType: errorType.trim(),
-        errorMessage: rest.join(':').trim(),
-        raw: stderr,
-    };
-}
-
-function getRuntimeCommand(extension: string): string | null { // checks if the runtime for the given file extension is available on the system PATH and returns the command to invoke it, or null if not found
-    const isWindows = os.platform() === 'win32';
-
-    const candidates: Record<string, string[]> = {
-        'py': isWindows ? ['python', 'python3'] : ['python3', 'python'],
-        'js': ['node'],
-        'ts': ['ts-node'],
-    };
-
-    const options = candidates[extension];
-    if (!options) return null;
-
-    // Try each candidate and return the first one that exists on PATH
-    for (const cmd of options) {
+    private async captureExceptionDetails(threadId: number): Promise<void> {
         try {
-            execSync(`${cmd} --version`, { stdio: 'ignore' });
-            return cmd; // this one works
-        } catch {
-            continue; // not found, try next
-        }
-    }
+            let errorType = 'UncaughtException';
+            let errorMessage = 'An unhandled runtime error occurred.';
+            let rawStackTrace = '';
+            const parsedFrames: StackFrame[] = [];
 
-    return null; // nothing found
-}
+            // 1. Programmatically request exception details (DAP exceptionInfo)
+            // Removed the session.capabilities check. We try the request directly.
+            try {
+                const exceptionInfo = await this.session.customRequest('exceptionInfo', { threadId });
+                if (exceptionInfo) {
+                    errorType = exceptionInfo.exceptionId || errorType;
+                    errorMessage = exceptionInfo.description || exceptionInfo.text || errorMessage;
+                }
+            } catch (err) {
+                // If the specific debug adapter doesn't support exceptionInfo, 
+                // it rejects here and we safely fallback to our defaults.
+            }
 
-export function runAndTrackErrors(filePath: string, language: string) {
-    const relFile = vscode.workspace.asRelativePath(filePath, false);
-    if (!fs.existsSync(filePath)) {
-        logTelemetry('Run.Program', null, { reason: 'file not found'}, { file: relFile, language, executionResult: 'Error'});
-        return;
-    }
+            // 2. Programmatically request structured stack trace (DAP stackTrace)
+            try {
+                const stackTrace = await this.session.customRequest('stackTrace', {
+                    threadId,
+                    startFrame: 0,
+                    levels: 10 // Capture up to 10 frames of depth
+                });
 
-    const extension = filePath.split('.').pop() ?? '';
-    const runtime = getRuntimeCommand(extension);
-    if (!runtime) {
-        // Specific message for missing Python on Windows
-        logTelemetry(
-            'Run.Program',
-            null,
-            {reason: 'runtime not found on PATH', extension, platform: os.platform()},
-            {file: relFile, language, executionResult: 'Error'}
-        );
-        vscode.window.showErrorMessage(
-            `No runtime found for .${extension} files. Make sure Python is installed and added to PATH.`
-        );
-        return;
-    }
+                if (stackTrace && stackTrace.stackFrames) {
+                    for (const frame of stackTrace.stackFrames) {
+                        // Convert the frame path to workspace-relative layout
+                        const absolutePath = frame.source?.path || '';
+                        const relPath = absolutePath 
+                            ? vscode.workspace.asRelativePath(absolutePath, false)
+                            : (frame.source?.name || 'unknown');
 
-    exec(`"${runtime}" "${filePath}"`, { timeout: 5000 }, (error, stdout, stderr) => {
-        if (error?.killed) {
-            const event = logTelemetry('Run.Program', null, { reason: 'timeout' }, { file: relFile, language, executionResult: 'Timeout' });
-            // cups.onRunOrCompileError(relFile, event.EventID, event.ClientTimestamp);
-            return;
-        }
+                        parsedFrames.push({
+                            file: relPath,
+                            line: frame.line || 0,
+                            column: frame.column || 0,
+                            functionName: frame.name || 'anonymous',
+                            code: '' // Programmatic DAP requests provide frame metrics instead of source content
+                        });
+                    }
 
-        if (!error) {
-            const event = logTelemetry('Run.Program', null, { reason: 'success' }, { file: relFile, language, executionResult: 'Success' });
-            // cups.onRunOrCompileError(relFile, event.EventID, event.ClientTimestamp); // running to test is still 'testing', success or not
-            return;
-        }
+                    // Build a standard formatted traceback string for the raw log
+                    rawStackTrace = stackTrace.stackFrames
+                        .map((frame: any) => {
+                            const source = frame.source?.path || frame.source?.name || 'unknown';
+                            return `  at ${frame.name} (${source}:${frame.line}:${frame.column})`;
+                        })
+                        .join('\n');
+                }
+            } catch (err) {
+                // Fall back if stackTrace request fails
+            }
 
-        const { frames, errorType, errorMessage, raw } = parseStackTrace(stderr);
-        const firstFrame = frames[0] ?? null;
-
-        const event = logTelemetry('Run.Program', null,
-            {
-                exitCode: error.code,
+            // Cache the compiled exception details under the session ID
+            sessionExceptions.set(this.session.id, {
                 errorType,
                 errorMessage,
-                frameCount: frames.length,
-                stackFrames: frames,
-                rawStderr: raw,
-            },
-            { 
-                file: relFile, 
-                language, 
-                executionResult: 'Error' , 
-                sourceLocation: firstFrame ? {startLine: firstFrame.line} : undefined
+                stackFrames: parsedFrames,
+                rawStackTrace
+            });
+
+        } catch (error) {
+            console.error('[codexlog] Failed to retrieve programmatic exception details:', error);
+        }
+    }
+}
+
+/**
+ * Registers the passive debugger tracker factory and maps lifecycle completions
+ * to write structured telemetry events safely.
+ */
+export function registerAutomaticRuntimeTracker(context: vscode.ExtensionContext) {
+    
+    // Register the passive DAP tracker factory across all files & languages
+    context.subscriptions.push(
+        vscode.debug.registerDebugAdapterTrackerFactory('*', {
+            createDebugAdapterTracker(session: vscode.DebugSession) {
+                return new ProgrammaticErrorTracker(session);
             }
-        );
-        // cups.onRunOrCompileError(relFile, event.EventID, event.ClientTimestamp);
-    });
+        })
+    );
+
+    // Track active completions when execution sessions terminate
+    context.subscriptions.push(
+        vscode.debug.onDidTerminateDebugSession((session) => {
+            const exception = sessionExceptions.get(session.id);
+            sessionExceptions.delete(session.id);
+
+            const filePath = session.configuration.program || vscode.window.activeTextEditor?.document.fileName || 'unknown';
+            const relFile = vscode.workspace.asRelativePath(filePath, false);
+            const language = session.configuration.type || 'unknown';
+
+            if (exception) {
+                // Case A: Program crashed
+                const firstFrame = exception.stackFrames[0] ?? null;
+
+                const event = logTelemetry('Run.Program', null, {
+                    executionResult: 'Error',
+                    file: relFile,
+                    language,
+                    exitCode: 1,
+                    errorType: exception.errorType,
+                    errorMessage: exception.errorMessage,
+                    frameCount: exception.stackFrames.length,
+                    stackFrames: exception.stackFrames,
+                    rawStderr: exception.rawStackTrace,
+                    sourceLocation: firstFrame ? { startLine: firstFrame.line } : undefined
+                });
+                
+            } else {
+                // Case B: Clean execution
+                const event = logTelemetry('Run.Program', null, { 
+                    executionResult: 'Success',
+                    file: relFile,
+                    language,
+                    reason: 'success' 
+                });
+                
+            }
+        })
+    );
 }
