@@ -139,10 +139,12 @@ Once the Extension Development Host is running, you can exercise the full teleme
 ### 3. Runtime tracker / debug execution
 
 - Open a supported script such as a Python, JavaScript, or TypeScript file.
-- Run the command CodexLog: Run and Track Errors from the Command Palette.
-- The extension will attempt to execute the file and log a Run.Program event.
-- If the file throws an error, the event will include stack trace details.
-- If the runtime is missing, the extension will log a runtime-not-found error and show a warning message.
+- Start a normal VS Code debug session for that file.
+- The runtime tracker now auto-runs whenever debugging starts, so users no longer need to invoke the CodexLog: Run and Track Errors command manually.
+- The tracker is currently wired to the debug-based execution path rather than the plain Run command.
+- If the file throws an error, the extension logs a Run.Program event with stack trace details.
+- If the runtime is missing, the extension logs a runtime-not-found error and shows a warning message.
+- A previous bug caused the runtime tracker to time out when the program hit an input block, such as waiting for user input from stdin. That is no longer the case; interactive execution is handled without treating input waits as a timeout.
 
 ### 4. Idle time tracking
 
@@ -171,7 +173,7 @@ The telemetry output is written to the extension storage area and can be inspect
 
 - Source is under `src/`.
 - Activity tracking is implemented in `src/activityTracker.ts` and captures edits, saves, AI suggestion outcomes, undo behavior, and active editing state.
-- Runtime execution tracking is implemented in `src/runtimeTracker.ts` for supported Python, JavaScript, and TypeScript files.
+- Runtime execution tracking is implemented in `src/runtimeTracker.ts` for supported Python, JavaScript, and TypeScript files and now auto-triggers during debug sessions.
 - Error tracking is implemented in `src/errorTracking.ts` and captures runtime failures, console errors, and diagnostics.
 - Telemetry logging is centralized in `src/telemetry.ts`, and the shared schema lives in `src/types.ts`.
 - Events are persisted as JSON for local storage and later analysis.
@@ -182,6 +184,7 @@ The telemetry output is written to the extension storage area and can be inspect
 
 - Activity tracking for edits, saves, AI-suggestion acceptance/reversion, and post-AI editing behavior is in place.
 - Structured telemetry events are being logged in a ProgSnap2-inspired schema.
+- Runtime tracking now auto-starts during debugging and no longer times out on input-blocking programs.
 - The event format is being prepared for integration with CUPS-style state modeling.
 - The logging pipeline is being positioned as the foundation for AI-generated personalized feedback prompts.
 

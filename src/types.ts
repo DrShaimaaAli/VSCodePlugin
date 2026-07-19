@@ -17,7 +17,7 @@ export type EventType =
     | 'File.Close'
     | 'File.Edit'
     | 'File.Save'
-    | 'Compile' // was Compile.Error / Compile.Success -> now EventType + CompileResult
+    | 'File.ErrorCheck'
     | 'Run.Program'
     | 'X-AI.Suggestion.Accepted'
     | 'X-AI.Suggestion.Reverted'
