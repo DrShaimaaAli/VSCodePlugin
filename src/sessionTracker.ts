@@ -6,7 +6,7 @@
 // idle time
 import * as vscode from 'vscode'; // This gives access to: editor events, documents, commands, windows, workspace, APIs
 import {logTelemetry, isTelemetryLogDocument} from './telemetry';
-import * as cups from './CupsStateTracker';
+import * as cups from './cupsStateTracker';
 
 export function startSessionTracking (context: vscode.ExtensionContext) {
     const sessionStart = Date.now();
