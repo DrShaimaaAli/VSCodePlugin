@@ -2,6 +2,7 @@
 
 import * as vscode from 'vscode'; // This gives access to: editor events, documents, commands, windows, workspace, APIs
 import { logTelemetry, isTelemetryLogDocument} from './telemetry'; // Importing the logTelemetry function to use for logging telemetry events
+import * as cups from './cupsStateTracker';
 
 let totalEdits = 0; // Global variable to track total edits across all documents
 let totalSaves = 0; // Global variable to track total saves across all documents
@@ -10,7 +11,6 @@ const AI_MIN_LINES = 3;
 const AI_MIN_CHARS = 50; 
 const POST_AI_IDLE_THRESHOLD = 30 * 1000; // 30 seconds
 const UNDO_ATTRIBUTION_THRESHOLD = 60 * 1000; // Number of undos after which we stop attributing to the AI suggestion
-
 
 interface LineRange {startLine: number; endLine: number;} // Interface to represent a range of lines in a document, used for tracking changes and edits
 
@@ -34,6 +34,41 @@ function shiftRangeForEdit(range: LineRange, editStartLine: number, editEndLine:
 	return range;
 }
 
+// Inspired by Copilot Chat's own OTel metrics (copilot_chat.edit.survival.four_gram, and copilot_chat.edit.survival.no_revert)
+// rather than a binary "was this deletion an undo", score how much of the original inserted text still survives in the current document
+// via a character 4-gram Jaccard similarity. This catches replacements too, not just deletions - a student who selections
+// the AI-inserted code and retypes somthing different never matches the old 'change.text ===' undo check but, this score correctly
+// reflects that the suggestion didn't survive
+
+function ngrams(text: string, n = 4): Set<string> {
+	const grams = new Set<string>();
+	const normalized = text.replace(/\s+/g, ' ').trim();
+	for (let i = 0; i <= normalized.length - n; i++) {
+		grams.add(normalized.slice(i, i + n));
+	}
+	return grams;
+}
+
+// Jaccard similarity of the two texts' 4-gram sets, 0 (nothing shared) to 1 (identical).
+function survivalScore(originalText: string, currentText: string): number {
+	if (originalText.length === 0 && currentText.length === 0) {
+		return 1;
+	}
+	const a = ngrams(originalText);
+	const b = ngrams(currentText);
+	if (a.size === 0 || b.size === 0) {
+		return a.size === b.size ? 1 : 0;
+	}
+	let intersection = 0;
+	for (const gram of a) {
+		if (b.has(gram)) {
+			intersection++;
+		}
+	}
+	const union = a.size + b.size - intersection;
+	return union === 0 ? 1 : intersection / union;
+}
+
 export function startActivityTracking(context: vscode.ExtensionContext) {
     let postAIIdleTimer: NodeJS.Timeout | null = null; // Timer to track idle time after AI-generated code is detected
 	let undoCountSinceAI = 0; // Counter to track the number of undo actions since AI-generated code was detected
@@ -42,7 +77,7 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 	let lastAiAcceptedEventId: string | null = null; // ParentEventID for reverts/idle tied to this acceptance
 	let lastAiAcceptedTime: number | null = null; // Timestamp of the last AI-generated code acceptance, used to determine if subsequent edits are related to the AI suggestion
 	let lastAiInsertionRange: LineRange | null = null; // Range of lines affected by the last AI-generated code insertion, used to determine if subsequent edits overlap with the AI suggestion
-
+	let lastAiInsertionOriginalText: string | null = null; // The original inserted text, kept for survival score-comparison against what's there now
 	// Adding event listeners to the extension's subscriptions to ensure they are properly disposed of when the extension is deactivated, 
 	// preventing memory leaks and ensuring clean resource management
 	context.subscriptions.push(
@@ -80,8 +115,12 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 				lastAiAcceptedEventId = acceptedEvent.EventID; // remember it for any follow-up event
 				lastAiAcceptedTime = Date.now(); // remember it for any follow-up event
 				lastAiInsertionRange = {startLine: change.range.start.line, endLine: change.range.start.line + lineCount - 1}; // remember it for any follow-up event
-					if (postAIIdleTimer) clearTimeout(postAIIdleTimer); // Clear any existing idle timer to reset the countdown for logging idle time after AI-generated code is detected
-					postAIIdleTimer = setTimeout(() => {
+				lastAiInsertionOriginalText = insertedText;
+
+				if (postAIIdleTimer) {
+					clearTimeout(postAIIdleTimer); // Clear any existing idle timer to reset the countdown for logging idle time after AI-generated code is detected
+				}
+				postAIIdleTimer = setTimeout(() => {
 						logTelemetry('X-AI.Suggestion.Idle', null, 
 						{
 							idleSeconds: POST_AI_IDLE_THRESHOLD / 1000,
@@ -100,12 +139,13 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
                     trackingUndos = true;
 				}
 				else {
-					if(postAIIdleTimer) {
-						clearTimeout(postAIIdleTimer); // Clear the idle timer if the user makes another edit before the idle threshold is reached, indicating they are actively working and not idle	
+					if (postAIIdleTimer) {
+						clearTimeout(postAIIdleTimer); // Clear the idle timer if the user makes another edit before the idle threshold is reached, indicating they are actively working and not idle
 						postAIIdleTimer = null;
 					}
 
-					if(trackingUndos){
+					let touchesSuggestion = false;
+					if (trackingUndos) {
 						const withinWindow = lastAiAcceptedTime !== null && (Date.now() - lastAiAcceptedTime) <= UNDO_ATTRIBUTION_THRESHOLD;
 						if (!withinWindow) { // If the undo action occurs outside the attribution window, stop tracking undos and reset related variables
 							trackingUndos = false;
@@ -113,13 +153,14 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 							lastAiAcceptedEventId = null;
 							lastAiAcceptedTime = null;
 							lastAiInsertionRange = null;
+							lastAiInsertionOriginalText = null;
 						}
 						else {
 							const editStartLine = change.range.start.line;
 							const editEndLine = change.range.end.line;
 							const editInsertedLineCount = lineCount;
 
-							const touchesSuggestion = lastAiInsertionRange !== null && rangesOverlap(lastAiInsertionRange, editStartLine, editEndLine);
+							touchesSuggestion = lastAiInsertionRange !== null && rangesOverlap(lastAiInsertionRange, editStartLine, editEndLine);
 							const isUndo = change.text === '' && change.rangeLength > 0;
  						
 							if(isUndo && touchesSuggestion){
@@ -144,6 +185,7 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 									lastAiAcceptedEventId = null;
 									lastAiAcceptedTime = null;
 									lastAiInsertionRange = null;
+									lastAiInsertionOriginalText = null;
 								}
 								else if(lastAiInsertionRange){
 									// Partial revert, update the tracked range to reflect the new state of the document after the undo
@@ -159,6 +201,24 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 								}
 							}
 						}
+
+						if (touchesSuggestion && lastAiInsertionRange !== null && lastAiInsertionOriginalText !== null) {
+							const clampedEndLine = Math.min(lastAiInsertionRange.endLine, event.document.lineCount - 1);
+							const currentRangeText = event.document.getText(new vscode.Range(lastAiInsertionRange.startLine, 0, clampedEndLine + 1, 0));
+							const score = survivalScore(lastAiInsertionOriginalText, currentRangeText);
+							const survivalEvent = logTelemetry(
+								'X-AI.Suggestion.SurvivalCheck',
+								null,
+								{survivalScore: score},
+								{
+									file: relFile,
+									parentEventId: lastAiAcceptedEventId ?? undefined,
+									editType: change.rangeLength > 0 ? "Replace" : "Insert"
+								}
+							);
+							//cups.onSurvivalCheck(relFile, survivalEvent.EventID, survivalEvent.ClientTimestamp, score);
+						}
+
 					// Only emit a File.Edit event (and feed the classifier) when we're not
                     // already in WritingNewCode — this bounds event volume to transition
                     // boundaries instead of logging every keystroke.
@@ -183,7 +243,9 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 		// Used to indicate checkpoint behavour, work cadence, and likely completion milestones
 		// can later evaluate edits per save, time between saves, and assignment engagement
 		vscode.workspace.onDidSaveTextDocument((document) => {
-			if (isTelemetryLogDocument(document.uri)) return;
+			if (isTelemetryLogDocument(document.uri)) {
+				return;
+			}
 			logTelemetry('File.Save', null, {
 				editsSinceLastSave: totalEdits, // Log the number of edits since the last save to analyze editing patterns and work cadence
 			},
@@ -197,7 +259,9 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push({
 		dispose: () => {
-			if (postAIIdleTimer) clearTimeout(postAIIdleTimer); // Clear the idle timer when the extension is deactivated to prevent any lingering timers from running after the extension is no longer active
+			if (postAIIdleTimer) {
+				clearTimeout(postAIIdleTimer); // Clear the idle timer when the extension is deactivated to prevent any lingering timers from running after the extension is no longer active
+			}
 		}
 	});
 	

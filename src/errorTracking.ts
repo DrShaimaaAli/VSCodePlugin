@@ -107,7 +107,7 @@ export function startErrorTracking(context: vscode.ExtensionContext) {
                 }
              }
              
-             logTelemetry('File.ErrorCheck', null, {
+             logTelemetry('X-Diagnostics.Check', null, {
                 errorCount: errorDiagnostics.length},
                 {
                     file: relFile,
