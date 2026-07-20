@@ -153,7 +153,7 @@ Once the Extension Development Host is running, you can exercise the full teleme
 - Resume activity by typing or editing again.
 - The tracker should then log X-Session.Idle.End and resume normal session tracking.
 
-### 5. AI suggestion acceptance and revert
+### 5. AI suggestion acceptance, survival, and revert
 
 - In an editor, insert a large block of text as a single insertion (for example, 3 or more lines and 50+ characters).
 - This should be treated as a likely AI suggestion and logged as X-AI.Suggestion.Accepted.
@@ -161,6 +161,12 @@ Once the Extension Development Host is running, you can exercise the full teleme
 - The extension should log X-AI.Suggestion.Idle.
 - Immediately after the acceptance, use Undo on the inserted block.
 - If the undo targets the suggestion range, the extension should log X-AI.Suggestion.Reverted as either Full or Partial.
+- To test the new survival metric, make a follow-up edit that touches the inserted block after the acceptance event:
+  - keep most of the text intact for a high survival score
+  - replace part of the block with different text for a lower score
+  - delete most of the block for a very low score
+- The extension should then log X-AI.Suggestion.SurvivalCheck with a survivalScore value in the event payload.
+- Future implementation may include to log the event only when the Ai suggestion idle timer is reached
 
 ### 6. Session and summary commands
 
@@ -172,7 +178,7 @@ The telemetry output is written to the extension storage area and can be inspect
 ## Development notes
 
 - Source is under `src/`.
-- Activity tracking is implemented in `src/activityTracker.ts` and captures edits, saves, AI suggestion outcomes, undo behavior, and active editing state.
+- Activity tracking is implemented in `src/activityTracker.ts` and captures edits, saves, AI suggestion outcomes, undo behavior, active editing state, and AI-suggestion survival scoring.
 - Runtime execution tracking is implemented in `src/runtimeTracker.ts` for supported Python, JavaScript, and TypeScript files and now auto-triggers during debug sessions.
 - Error tracking is implemented in `src/errorTracking.ts` and captures runtime failures, console errors, and diagnostics.
 - Telemetry logging is centralized in `src/telemetry.ts`, and the shared schema lives in `src/types.ts`.
@@ -182,7 +188,7 @@ The telemetry output is written to the extension storage area and can be inspect
 
 ## Current state
 
-- Activity tracking for edits, saves, AI-suggestion acceptance/reversion, and post-AI editing behavior is in place.
+- Activity tracking for edits, saves, AI-suggestion acceptance/reversion, post-AI editing behavior, and AI-suggestion survival scoring is in place.
 - Structured telemetry events are being logged in a ProgSnap2-inspired schema.
 - Runtime tracking now auto-starts during debugging and no longer times out on input-blocking programs.
 - The event format is being prepared for integration with CUPS-style state modeling.
