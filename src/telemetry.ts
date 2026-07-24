@@ -13,6 +13,7 @@ let STATES_FILE: string | null = null;
 // --- Session-scoped state, set once in initTelemetry() ----------------------
 let SESSION_ID: string | null = null;
 let SUBJECT_ID: string | null = null;
+let ASSIGNMENT_ID: string | null = null; // set from workspace config in initTelemetry() - see extension.ts
 const TOOL_INSTANCE = 'codexlog-vscode/0.3.0';
 
 let orderCounter = 0;                                  // per-session monotonic Order
@@ -31,6 +32,7 @@ export function initTelemetry(storagePath: string) {
     if (!fs.existsSync(STATES_FILE)) fs.writeFileSync(STATES_FILE, '[]', 'utf-8');
 
     SESSION_ID = crypto.randomUUID();
+    ASSIGNMENT_ID = ASSIGNMENT_ID ?? null;
     orderCounter = 0;
     lastEventTimeByFile.clear();
 
@@ -141,6 +143,29 @@ export function logTelemetry(
 
     return event;
 }
+// --- Identity getters/setters --------------------------------------------
+
+export function getSessionId(): string | null {
+    return SESSION_ID;
+}
+export function setSessionId(id: string): void {
+    SESSION_ID = id;
+}
+ 
+export function getSubjectId(): string | null {
+    return SUBJECT_ID;
+}
+export function setSubjectId(id: string): void {
+    SUBJECT_ID = id;
+}
+ 
+export function getAssignmentId(): string | null {
+    return ASSIGNMENT_ID;
+}
+export function setAssignmentId(id: string | null): void {
+    ASSIGNMENT_ID = id;
+}
+ 
 
 // --- CodeStates table ---------------------------------------------------------
 

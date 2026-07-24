@@ -23,6 +23,15 @@ EditType, CompileResult, ExecutionResult, and SourceLocation
 fields, adopted directly from the ProgSnap2 spec in place of earlier
 ad hoc EventSubtype values
 X-Workspace.Folders.Changed event type (found missing during migration)
+Stack-trace error logging can now be triggered from the Debug button
+through the VS Code Debug Adapter Protocol (DAP) via debug adapter
+tracking. This uses the same debug-adapter lifecycle hooks implemented
+by the Python, Node.js, Java, and C++ extensions, so it works
+consistently across languages. It is only available when code is run in
+a debugging session; ordinary Run / Start without debug does not emit
+these adapter events, so stack traces cannot be captured in that mode.
+Copilot OTEL telemetry now includes the survival score metric, adding
+another signal for runtime persistence and agent/assistant outcomes.
 
 
 ### Changed
@@ -64,6 +73,13 @@ partial-revert shrink formula used the "lines spanned" convention
 1-2 character one — incorrectly chopped a full line off the tracked
 range. Verified this collapsed a 5-line range to nothing after ~5
 ordinary backspaces; fixed by dropping the + 1.
+File-close tracking now ignores Git internal documents. The
+onDidCloseTextDocument event listener previously captured background
+Git disposals and logged them as user File.Close events because it did
+not explicitly filter out non-file document schemes. Because these
+virtual Git URIs do not map cleanly to workspace files,
+vscode.workspace.asRelativePath could fall back to printing the full
+absolute Windows path with ".git" appended, which is now avoided.
 
 
 ## [0.2.0] — ProgSnap2-style schema

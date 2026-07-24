@@ -5,23 +5,73 @@
 // active coding time
 // idle time
 import * as vscode from 'vscode'; // This gives access to: editor events, documents, commands, windows, workspace, APIs
-import {logTelemetry, isTelemetryLogDocument} from './telemetry';
+import {logTelemetry, isTelemetryLogDocument, setSessionId} from './telemetry';
 import * as cups from './cupsStateTracker';
 
+const SESSION_STATE_KEY = 'codexlog.activeSession';
+const RESUME_THRESHOLD_MS = 10 * 1000; // 5-minute window for reloads/restarts
+const IDLETHRESHOLD = 2 * 60 * 1000; // 2 minutes
+
+interface PersistedSession {
+    sessionId: string;
+    sessionStartMs: number;
+    lastActiveMs: number;
+    accumulatedCodingMs: number;
+}
+
 export function startSessionTracking (context: vscode.ExtensionContext) {
-    const sessionStart = Date.now();
+    const now = Date.now();
+    const storedSession = context.globalState.get<PersistedSession>(SESSION_STATE_KEY);
+    
+    let sessionId: string;
+    let sessionStartMs: number;
     let activeCodingTime = 0; // Time spent actively coding (not idle)
     let lastActivityTime = Date.now(); // Timestamp of the last detected activity, used to calculate idle time
     let isIdle = false; // Flag to indicate whether the user is currently idle, helps in determining when to start and stop idle time tracking
     let idleStartEventId: string | null = null; // EventID for the start of the idle period, used to log when the user becomes idle
 
-    const idleThreshold = 2 * 60 * 1000; // 2 minutes
+    if (storedSession && (now - storedSession.lastActiveMs) < RESUME_THRESHOLD_MS) {
+        // Resume existing session(window reload / fast restart)
+        sessionId = storedSession.sessionId;
+        sessionStartMs = storedSession.sessionStartMs;
+        activeCodingTime = storedSession.accumulatedCodingMs;
+        lastActivityTime = storedSession.lastActiveMs;
 
-    logTelemetry('Session.Start', null, {workspace : vscode.workspace.name}); // Log the start of a new session with a timestamp for analysis
+        // Set Telemetry module to use the existing Session ID
+        setSessionId(sessionId);
+    } 
+    else {
+        if (storedSession) {
+            // Retroactively close the old abandoned session att its true last active time
+            logTelemetry('Session.End', null, {
+                durationMinutes: Math.floor((storedSession.lastActiveMs - storedSession.sessionStartMs) / 60000),
+                activeCodingMinutes: Math.floor(storedSession.accumulatedCodingMs / 60000),
+                reason: 'TimeoutOrClose'
+            });
+        }
+        // Initialize fresh session
+        sessionStartMs = now;
+        activeCodingTime = 0;
+        lastActivityTime = now;
+        sessionId = vscode.env.sessionId || crypto.randomUUID();
+        setSessionId(sessionId);
+
+        logTelemetry('Session.Start', null, { workspace: vscode.workspace.name });
+    }
+
+    // Helper: Persist current session state snapshot to globalState
+    function persistState() {
+        context.globalState.update(SESSION_STATE_KEY, {
+            sessionId,
+            sessionStartMs,
+            lastActiveMs: Date.now(),
+            accumulatedCodingMs: activeCodingTime
+        });
+    }
+
 
     function registerActivity() { // Function to register user activity, updating active coding time and resetting idle time tracking
         const now = Date.now();
-
         if (isIdle) { // If the user was previously idle, log the idle time and reset the idle flag
             const actualIdleDurationMs = now - lastActivityTime;
             logTelemetry('X-Session.Idle.End', null,{duration: actualIdleDurationMs, durationMinutes: Math.round((actualIdleDurationMs / 60000) * 100) / 100},
@@ -36,6 +86,8 @@ export function startSessionTracking (context: vscode.ExtensionContext) {
             activeCodingTime += now - lastActivityTime;
         }
         lastActivityTime = now;
+
+        persistState();
     }
 
     const testListener = vscode.workspace.onDidChangeTextDocument((event) => {
@@ -49,7 +101,7 @@ export function startSessionTracking (context: vscode.ExtensionContext) {
     const idleChecker = setInterval(() => { // Set up an interval to check for idle time
         const now = Date.now();
         const idleDuration = now - lastActivityTime; // Calculate the duration of idle time since the last activity
-        if (idleDuration >= idleThreshold && !isIdle) { // If the idle duration exceeds the threshold and the user is not already marked as idle
+        if (idleDuration >= IDLETHRESHOLD && !isIdle) { // If the idle duration exceeds the threshold and the user is not already marked as idle
             isIdle = true;
             const event = logTelemetry('X-Session.Idle.Start', null, {idleMinutes: Math.floor(idleDuration / 60000)}, {initiator: 'ToolTimedEvent'}); // Log the start of idle time for analysis
             idleStartEventId = event.EventID;
@@ -64,14 +116,9 @@ export function startSessionTracking (context: vscode.ExtensionContext) {
     context.subscriptions.push(folderListener); // Listen for changes in workspace folders to log when workspaces are added or removed
 
     function endSession() {
-        cups.closeCurrentState();
-        const now = Date.now();
-        if (!isIdle) {
-            activeCodingTime += now - lastActivityTime;
-        }
-
-        const totalTime = now - sessionStart; // Calculate the total session duration from the start time to the current time
-        logTelemetry("Session.End", null, {durationMinutes: Math.floor(totalTime / 60000), activeCodingMinutes: Math.floor(activeCodingTime / 60000), idleMinutes: Math.floor((totalTime - activeCodingTime) / 60000)});
+    // Save the latest state timestamp before window unloads
+        persistState();
+        cups.closeCurrentState();    
     }
 
     return{endSession}; // Return the endSession function to be called when the extension is deactivated, allowing it to log the final session summary
