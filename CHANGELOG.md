@@ -23,6 +23,25 @@ EditType, CompileResult, ExecutionResult, and SourceLocation
 fields, adopted directly from the ProgSnap2 spec in place of earlier
 ad hoc EventSubtype values
 X-Workspace.Folders.Changed event type (found missing during migration)
+Stack-trace error logging can now be triggered from the Debug button
+through the VS Code Debug Adapter Protocol (DAP) via debug adapter
+tracking. This uses the same debug-adapter lifecycle hooks implemented
+by the Python, Node.js, Java, and C++ extensions, so it works
+consistently across languages. It is only available when code is run in
+a debugging session; ordinary Run / Start without debug does not emit
+these adapter events, so stack traces cannot be captured in that mode.
+Copilot OTEL telemetry now includes the survival score metric, adding
+another signal for runtime persistence and agent/assistant outcomes.
+A new regret-window summary is now emitted after AI-suggestion acceptance
+to track follow-up deletions in a short post-acceptance window. This is
+intended as an optional post-hoc analysis signal rather than a definitive
+measure of confusion or regret.
+A scaffold decay-rate checkpoint now records cumulative AI-inserted
+versus manually typed characters on save, providing a longitudinal view
+of how much suggested scaffold persists across later edits.
+A verification-buffer log can now be opened from the Command Palette via
+CodexLog: Open Verification Buffer Log, exposing derived bufferMs-style
+analysis data for external inspection.
 
 
 ### Changed
@@ -64,6 +83,17 @@ partial-revert shrink formula used the "lines spanned" convention
 1-2 character one — incorrectly chopped a full line off the tracked
 range. Verified this collapsed a 5-line range to nothing after ~5
 ordinary backspaces; fixed by dropping the + 1.
+File-close tracking now ignores Git internal documents. The
+onDidCloseTextDocument event listener previously captured background
+Git disposals and logged them as user File.Close events because it did
+not explicitly filter out non-file document schemes. Because these
+virtual Git URIs do not map cleanly to workspace files,
+vscode.workspace.asRelativePath could fall back to printing the full
+absolute Windows path with ".git" appended, which is now avoided.
+Session lifecycle handling is now more robust: Session.Start and
+Session.End are tied to persisted session state so they are less likely
+to produce false session churn when the window is closed, refreshed, or
+crashes unexpectedly.
 
 
 ## [0.2.0] — ProgSnap2-style schema

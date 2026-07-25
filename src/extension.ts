@@ -6,7 +6,7 @@ import {isCopilotActive} from './detectCopilot';
 import {startSessionTracking} from './sessionTracker';
 import {startErrorTracking} from './errorTracking';
 import { registerAutomaticRuntimeTracker } from './runtimeTracker';
-import {initTelemetry, getLogFilePath} from './telemetry';
+import {initTelemetry, getLogFilePath, getVerificationBufferFilePath} from './telemetry';
 import path from 'path';
 
 // This method is called when your extension is activated
@@ -52,6 +52,18 @@ export function activate(context: vscode.ExtensionContext) {
 		});
 	});
 	context.subscriptions.push(openLogCommand);
+
+	const openVerificationBufferCommand = vscode.commands.registerCommand('codexlog.openVerificationBuffer', () => {
+		const logPath = getVerificationBufferFilePath();
+		if (!logPath) {
+			vscode.window.showErrorMessage('Verification buffer log not initialised yet.');
+			return;
+		}
+		vscode.workspace.openTextDocument(logPath).then(doc => {
+			vscode.window.showTextDocument(doc);
+		});
+	});
+	context.subscriptions.push(openVerificationBufferCommand);
 }
 
 // This method is called when your extension is deactivated

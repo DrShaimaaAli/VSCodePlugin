@@ -24,6 +24,8 @@ export type EventType =
     | 'X-AI.Suggestion.Accepted'
     | 'X-AI.Suggestion.Reverted'
     | 'X-AI.Suggestion.SurvivalCheck' // continuous 0-1 similarity score, inspired by Copilot's own edit.Survival. * OTel metrics
+    | 'X-AI.RegretWindow.Summary'
+    | 'X-Scaffold.DecayCheckpoint'
     | 'X-AI.Suggestion.Idle'
     | 'X-Error.Introduced'
     | 'X-Error.Resolved'

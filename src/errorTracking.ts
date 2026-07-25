@@ -125,6 +125,10 @@ export function startErrorTracking(context: vscode.ExtensionContext) {
             if (isTelemetryLogDocument(document.uri)) {
                 return;
             }
+            // 2. FIX: Only log actual user disk files or new untitled files
+            if (document.uri.scheme !== 'file' && document.uri.scheme !== 'untitled') {
+                return; // Bails out on 'git:', 'git-index:', or virtual diff documents
+            }
             trackedFiles.delete(document.uri.toString()); // Stop tracking files that are closed to avoid memory leaks
             logTelemetry('File.Close', null, {}, {
                 file: vscode.workspace.asRelativePath(document.uri, false),

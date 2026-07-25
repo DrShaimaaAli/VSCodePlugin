@@ -8,6 +8,8 @@ CodexLog is a VS Code extension for collecting structured coding activity teleme
 - Events follow a ProgSnap2-inspired structure, making them easier to compare, analyze, and export.
 - The logging pipeline is designed to be connected to a CUPS state diagram so that behavior can be interpreted as state transitions rather than isolated actions.
 - The same telemetry stream will later be used to build prompts for AI-driven, personalized feedback about coding habits, debugging behavior, and AI-assistance usage.
+- New post-hoc analysis signals include a regret-window summary for follow-up deletions after AI suggestion acceptance and a scaffold decay-rate checkpoint that tracks how much AI-inserted content persists across subsequent edits.
+- Session lifecycle logging is now more robust, with Session.Start and Session.End events tied to persisted session state so they are less likely to produce false session churn when the window is closed, refreshed, or crashes unexpectedly.
 
 ## Telemetry format
 
@@ -166,12 +168,26 @@ Once the Extension Development Host is running, you can exercise the full teleme
   - replace part of the block with different text for a lower score
   - delete most of the block for a very low score
 - The extension should then log X-AI.Suggestion.SurvivalCheck with a survivalScore value in the event payload.
-- Future implementation may include to log the event only when the Ai suggestion idle timer is reached
+- A new regret-window summary is also available as a post-hoc signal. After an AI suggestion is accepted, the extension tracks follow-up deletions during a short window and emits X-AI.RegretWindow.Summary. This metric is best treated as an optional, heuristic analysis layer rather than a definitive measure of confusion or regret, because it can be noisy and may over- or under-count depending on how the user edits the document later.
+- A new command, CodexLog: Open Verification Buffer Log, opens the generated verification-buffer file for inspecting derived timing metrics such as bufferMs.
 
-### 6. Session and summary commands
+### 6. Scaffold decay rate
+
+- The scaffold decay-rate feature records cumulative AI-inserted characters versus cumulative manually typed characters and emits a checkpoint event on save.
+- This is significant because it gives a simple longitudinal view of how much AI-generated scaffold persists over time. A high AI ratio suggests that the user kept or adapted the suggested structure, while a low ratio suggests that the scaffold was quickly overwritten, deleted, or replaced.
+- In practice, this metric is most useful as a trend signal across many sessions rather than as a single-event verdict. It helps connect acceptance behavior to later editing behavior and provides a richer view of whether AI assistance actually shaped the final code.
+
+### 7. Session lifecycle and shutdown handling
+
+- The extension now persists session state so that Session.Start and Session.End events are written more reliably across regular shutdown, window refresh, and unexpected crashes.
+- This avoids the previous problem of a user leaving VS Code or refreshing the window causing misleading extra session activity or a false session boundary.
+- If the extension restarts quickly, it can resume the previous session state instead of treating the event as a brand-new session.
+
+### 8. Session and summary commands
 
 - Use the command CodexLog: Log Telemetry to view a quick summary of total edits and saves.
 - Use Open Telemetry Log to view the generated JSON telemetry log directly.
+- Use CodexLog: Open Verification Buffer Log to inspect the derived verification-buffer data for post-hoc analysis.
 
 The telemetry output is written to the extension storage area and can be inspected locally for analysis or debugging.
 
@@ -188,9 +204,11 @@ The telemetry output is written to the extension storage area and can be inspect
 
 ## Current state
 
-- Activity tracking for edits, saves, AI-suggestion acceptance/reversion, post-AI editing behavior, and AI-suggestion survival scoring is in place.
+- Activity tracking for edits, saves, AI-suggestion acceptance/reversion, post-AI editing behavior, AI-suggestion survival scoring, and regret-window summaries is in place.
 - Structured telemetry events are being logged in a ProgSnap2-inspired schema.
+- Scaffold decay-rate checkpoints are now emitted to track how much AI-generated content persists across later edits and saves.
 - Runtime tracking now auto-starts during debugging and no longer times out on input-blocking programs.
+- Session lifecycle handling is more robust, with persisted state reducing false session churn on close, refresh, and crash scenarios.
 - The event format is being prepared for integration with CUPS-style state modeling.
 - The logging pipeline is being positioned as the foundation for AI-generated personalized feedback prompts.
 

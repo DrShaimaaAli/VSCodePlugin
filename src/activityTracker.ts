@@ -1,7 +1,7 @@
 // This file contains the main logic for the VSCode extension, including event listeners for tracking user activity and logging telemetry data
 
 import * as vscode from 'vscode'; // This gives access to: editor events, documents, commands, windows, workspace, APIs
-import { logTelemetry, isTelemetryLogDocument} from './telemetry'; // Importing the logTelemetry function to use for logging telemetry events
+import { logTelemetry, isTelemetryLogDocument, writeVerificationBufferLog } from './telemetry'; // Importing the logTelemetry function to use for logging telemetry events
 import * as cups from './cupsStateTracker';
 
 let totalEdits = 0; // Global variable to track total edits across all documents
@@ -78,6 +78,16 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 	let lastAiAcceptedTime: number | null = null; // Timestamp of the last AI-generated code acceptance, used to determine if subsequent edits are related to the AI suggestion
 	let lastAiInsertionRange: LineRange | null = null; // Range of lines affected by the last AI-generated code insertion, used to determine if subsequent edits overlap with the AI suggestion
 	let lastAiInsertionOriginalText: string | null = null; // The original inserted text, kept for survival score-comparison against what's there now
+
+	// Contribution 3: "Scaffold Decay Rate" - cumulative AI-inserted vs. manually-typed characters,
+	// flushed as a checkpoint on every save. short AI completions below the AI_MIN_LINES/AI_MIN_CHARS
+	// threshold are indistinguishable from manual typing and get counted as
+	// manual — same blind spot the acceptance heuristic itself has everywhere
+	// else in this file, not a new one introduced here.
+
+	let cumulativeAiChars = 0;
+	let cumulativeManualChars = 0;
+
 	// Adding event listeners to the extension's subscriptions to ensure they are properly disposed of when the extension is deactivated, 
 	// preventing memory leaks and ensuring clean resource management
 	context.subscriptions.push(
@@ -101,6 +111,7 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 
 				const isLikelyAISuggestion = lineCount >= AI_MIN_LINES && charCount >= AI_MIN_CHARS && change.rangeLength === 0; // Heuristic to identify potential AI-generated code based on the number of lines and characters inserted, and ensuring it's an insertion (not a replacement)
 				if (isLikelyAISuggestion) {
+					cumulativeAiChars += charCount;
 					// Log acceptance
 					const acceptedEvent = logTelemetry('X-AI.Suggestion.Accepted', null, 
 					{
@@ -142,6 +153,13 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 					if (postAIIdleTimer) {
 						clearTimeout(postAIIdleTimer); // Clear the idle timer if the user makes another edit before the idle threshold is reached, indicating they are actively working and not idle
 						postAIIdleTimer = null;
+					}
+ 
+					if (charCount > 0) {
+						// Any non-empty insertion/replacement here is, by construction, NOT
+						// the AI-acceptance path (that's handled in the isLikelyAISuggestion
+						// branch above) — so this is manually-typed content.
+						cumulativeManualChars += charCount;
 					}
 
 					let touchesSuggestion = false;
@@ -252,6 +270,25 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 			{
 				file: vscode.workspace.asRelativePath(document.uri, false), language: document.languageId
 			});
+
+			// Contribution 3: cumulative-so-far checkpoint. A single session's ratio
+			// is only a snapshot — the actual "decay" trend needs these checkpoints
+			// aggregated across many sessions over weeks, which is an analysis-layer
+			// job, not something computed here.
+			const totalChars = cumulativeAiChars + cumulativeManualChars;
+			logTelemetry(
+				'X-Scaffold.DecayCheckpoint',
+				null,
+				{
+					cumulativeAiChars,
+					cumulativeManualChars,
+					aiRatio: totalChars > 0 ? cumulativeAiChars / totalChars : null,
+				},
+				{ file: vscode.workspace.asRelativePath(document.uri, false), initiator: 'ToolReaction' }
+			);
+
+			writeVerificationBufferLog();
+
 			totalEdits = 0; // Reset the edit count after logging to start tracking edits for the next save
 			totalSaves++;
 		})
