@@ -32,6 +32,16 @@ a debugging session; ordinary Run / Start without debug does not emit
 these adapter events, so stack traces cannot be captured in that mode.
 Copilot OTEL telemetry now includes the survival score metric, adding
 another signal for runtime persistence and agent/assistant outcomes.
+A new regret-window summary is now emitted after AI-suggestion acceptance
+to track follow-up deletions in a short post-acceptance window. This is
+intended as an optional post-hoc analysis signal rather than a definitive
+measure of confusion or regret.
+A scaffold decay-rate checkpoint now records cumulative AI-inserted
+versus manually typed characters on save, providing a longitudinal view
+of how much suggested scaffold persists across later edits.
+A verification-buffer log can now be opened from the Command Palette via
+CodexLog: Open Verification Buffer Log, exposing derived bufferMs-style
+analysis data for external inspection.
 
 
 ### Changed
@@ -80,6 +90,10 @@ not explicitly filter out non-file document schemes. Because these
 virtual Git URIs do not map cleanly to workspace files,
 vscode.workspace.asRelativePath could fall back to printing the full
 absolute Windows path with ".git" appended, which is now avoided.
+Session lifecycle handling is now more robust: Session.Start and
+Session.End are tied to persisted session state so they are less likely
+to produce false session churn when the window is closed, refreshed, or
+crashes unexpectedly.
 
 
 ## [0.2.0] — ProgSnap2-style schema

@@ -28,6 +28,10 @@
       {
         "command": "codexlog.openLog",
         "title": "Open Telemetry Log"
+      },
+      {
+        "command": "codexlog.openVerificationBuffer",
+        "title": "Open Verification Buffer Log"
       }
     ]
   },

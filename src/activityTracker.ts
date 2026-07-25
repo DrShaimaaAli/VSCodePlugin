@@ -1,7 +1,7 @@
 // This file contains the main logic for the VSCode extension, including event listeners for tracking user activity and logging telemetry data
 
 import * as vscode from 'vscode'; // This gives access to: editor events, documents, commands, windows, workspace, APIs
-import { logTelemetry, isTelemetryLogDocument} from './telemetry'; // Importing the logTelemetry function to use for logging telemetry events
+import { logTelemetry, isTelemetryLogDocument, writeVerificationBufferLog } from './telemetry'; // Importing the logTelemetry function to use for logging telemetry events
 import * as cups from './cupsStateTracker';
 
 let totalEdits = 0; // Global variable to track total edits across all documents
@@ -11,7 +11,6 @@ const AI_MIN_LINES = 3;
 const AI_MIN_CHARS = 50; 
 const POST_AI_IDLE_THRESHOLD = 30 * 1000; // 30 seconds
 const UNDO_ATTRIBUTION_THRESHOLD = 60 * 1000; // Number of undos after which we stop attributing to the AI suggestion
-const REGRET_WINDOW_MS = 3 * 60 * 1000; // 3-minute post-acceptance windwo for Regret Loop
 
 interface LineRange {startLine: number; endLine: number;} // Interface to represent a range of lines in a document, used for tracking changes and edits
 
@@ -79,14 +78,6 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 	let lastAiAcceptedTime: number | null = null; // Timestamp of the last AI-generated code acceptance, used to determine if subsequent edits are related to the AI suggestion
 	let lastAiInsertionRange: LineRange | null = null; // Range of lines affected by the last AI-generated code insertion, used to determine if subsequent edits overlap with the AI suggestion
 	let lastAiInsertionOriginalText: string | null = null; // The original inserted text, kept for survival score-comparison against what's there now
-	
-	// Contribution 2: "AI-Induced Regret Loop" - tracks ALL deletions (not just ones touching the specific AI-inserted range)
-	// within a fixed window after each acceptance, to guantify general thrashing/confusion, not just direct reversion of the exact suggested lines
-
-	let regretWindowTimer: NodeJS.Timeout | null = null;
-	let regretWindowStartEventId: string | null = null;
-	let regretDeletionCount = 0;
-	let regretDeletionChars = 0;
 
 	// Contribution 3: "Scaffold Decay Rate" - cumulative AI-inserted vs. manually-typed characters,
 	// flushed as a checkpoint on every save. short AI completions below the AI_MIN_LINES/AI_MIN_CHARS
@@ -97,21 +88,6 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 	let cumulativeAiChars = 0;
 	let cumulativeManualChars = 0;
 
-function flushRegretWindow(relFile: string) {
-		if (regretWindowTimer) clearTimeout(regretWindowTimer);
-		if (regretWindowStartEventId) {
-			logTelemetry(
-				'X-AI.RegretWindow.Summary',
-				null,
-				{ deletionCount: regretDeletionCount, deletionChars: regretDeletionChars, windowMs: REGRET_WINDOW_MS },
-				{ file: relFile, parentEventId: regretWindowStartEventId, initiator: 'ToolTimedEvent' }
-			);
-		}
-		regretWindowTimer = null;
-		regretWindowStartEventId = null;
-		regretDeletionCount = 0;
-		regretDeletionChars = 0;
-	}
 	// Adding event listeners to the extension's subscriptions to ensure they are properly disposed of when the extension is deactivated, 
 	// preventing memory leaks and ensuring clean resource management
 	context.subscriptions.push(
@@ -179,15 +155,6 @@ function flushRegretWindow(relFile: string) {
 						postAIIdleTimer = null;
 					}
  
-					// Contribution 2: tally ANY deletion while a regret window is open,
-					// regardless of whether it touches the specific AI-inserted range —
-					// this is deliberately broader than the range-scoped revert tracking
-					// below, since general thrashing nearby is still part of the pattern.
-					const isDeletionEdit = change.text === '' && change.rangeLength > 0;
-					if (isDeletionEdit && regretWindowTimer !== null) {
-						regretDeletionCount++;
-						regretDeletionChars += change.rangeLength;
-					}
 					if (charCount > 0) {
 						// Any non-empty insertion/replacement here is, by construction, NOT
 						// the AI-acceptance path (that's handled in the isLikelyAISuggestion
@@ -319,6 +286,8 @@ function flushRegretWindow(relFile: string) {
 				},
 				{ file: vscode.workspace.asRelativePath(document.uri, false), initiator: 'ToolReaction' }
 			);
+
+			writeVerificationBufferLog();
 
 			totalEdits = 0; // Reset the edit count after logging to start tracking edits for the next save
 			totalSaves++;

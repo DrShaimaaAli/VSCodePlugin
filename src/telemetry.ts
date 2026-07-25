@@ -9,6 +9,7 @@ import * as vscode from 'vscode';
 let LOG_FILE: string | null = null;
 let CODE_STATES_FILE: string | null = null;
 let STATES_FILE: string | null = null;
+let VERIFICATION_BUFFER_FILE: string | null = null;
 
 // --- Session-scoped state, set once in initTelemetry() ----------------------
 let SESSION_ID: string | null = null;
@@ -26,10 +27,12 @@ export function initTelemetry(storagePath: string) {
     LOG_FILE = path.join(storagePath, 'telemetry.json');
     CODE_STATES_FILE = path.join(storagePath, 'codeStates.json');
     STATES_FILE = path.join(storagePath, 'programmerStates.json');
+    VERIFICATION_BUFFER_FILE = path.join(storagePath, 'verificationBuffer.json');
 
     if (!fs.existsSync(LOG_FILE)) fs.writeFileSync(LOG_FILE, '[]', 'utf-8');
     if (!fs.existsSync(CODE_STATES_FILE)) fs.writeFileSync(CODE_STATES_FILE, '[]', 'utf-8');
     if (!fs.existsSync(STATES_FILE)) fs.writeFileSync(STATES_FILE, '[]', 'utf-8');
+    if (!fs.existsSync(VERIFICATION_BUFFER_FILE)) fs.writeFileSync(VERIFICATION_BUFFER_FILE, '[]', 'utf-8');
 
     SESSION_ID = crypto.randomUUID();
     ASSIGNMENT_ID = ASSIGNMENT_ID ?? null;
@@ -201,6 +204,71 @@ export function getLogFilePath(): string | null {
     return LOG_FILE;
 }
 
+export function getVerificationBufferFilePath(): string | null {
+    return VERIFICATION_BUFFER_FILE;
+}
+
+export function writeVerificationBufferLog(): string | null {
+    if (!LOG_FILE || !VERIFICATION_BUFFER_FILE) return null;
+
+    const events = readEvents();
+
+    // sort chronologically by timestamp
+    const sortedEvents = [...events].sort((a, b) =>
+        new Date(a.ClientTimestamp).getTime() - new Date(b.ClientTimestamp).getTime()
+    );
+
+    const acceptances = events.filter(e => e.EventType === 'X-AI.Suggestion.Accepted');
+    const results: Array<{
+        acceptanceEventId: string;
+        file: string;
+        acceptedAt: string;
+        executedAt: string | null;
+        executionEventType: 'Run.Program' | 'Compile' | null;
+        bufferMs: number | null;
+        bufferSeconds: number | null;
+        bufferFormatted: string | null;
+    }> = [];
+
+    for (const acceptance of acceptances) {
+        const acceptedAtMs = new Date(acceptance.ClientTimestamp).getTime();
+
+        // Fine the FIRST execution event chronologically AFTER this accepctance in the same session
+        const execution = events.find(e =>{
+            const eventMs = new Date(e.ClientTimestamp).getTime();
+            const isAfter = eventMs > acceptedAtMs;
+            const isSameSession = !e.SessionID || !acceptance.SessionID || e.SessionID === acceptance.SessionID;
+            const isSameFile = !e.File || !acceptance.File || e.File === acceptance.File;
+            const isExecution = (
+                e.EventType === 'Run.Program' ||
+                e.EventType === 'Compile' ||
+                e.EventType === 'X-Debug.Start' ||
+                e.EventType === 'X-Diagnostics.Check'
+            );
+            return isAfter && isSameSession && isSameFile && isExecution;
+        }
+        );
+
+        const executedAtMs = execution ? new Date(execution.ClientTimestamp).getTime() : null;
+        const bufferMs = executedAtMs !== null ? Math.max(0, executedAtMs - acceptedAtMs) : null;
+        const bufferSeconds = bufferMs !== null ? Math.round((bufferMs / 1000) * 100) / 100 : null;
+        
+        results.push({
+            acceptanceEventId: acceptance.EventID,
+            file: acceptance.File ?? 'unknown',
+            acceptedAt: acceptance.ClientTimestamp,
+            executedAt: execution?.ClientTimestamp ?? null,
+            executionEventType: execution ? (execution.EventType as 'Run.Program' | 'Compile') : null,
+            bufferMs: bufferMs,
+            bufferSeconds: bufferSeconds,
+            bufferFormatted: bufferSeconds !== null ? `${bufferSeconds}s` : null,
+        });
+    }
+
+    fs.writeFileSync(VERIFICATION_BUFFER_FILE, JSON.stringify(results, null, 2), 'utf-8');
+    return VERIFICATION_BUFFER_FILE;
+}
+
 // --- ProgrammerStates table (CUPS-inspired behavioral layer) ----------------
 
 function readStates(): ProgrammerState[] {
@@ -256,5 +324,6 @@ export function recordClosedState(
 export function isTelemetryLogDocument(uri: vscode.Uri): boolean {
     return (LOG_FILE !== null && uri.fsPath === LOG_FILE)
         || (CODE_STATES_FILE !== null && uri.fsPath === CODE_STATES_FILE)
-        || (STATES_FILE !== null && uri.fsPath === STATES_FILE);
+        || (STATES_FILE !== null && uri.fsPath === STATES_FILE)
+        || (VERIFICATION_BUFFER_FILE !== null && uri.fsPath === VERIFICATION_BUFFER_FILE);
 }

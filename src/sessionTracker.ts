@@ -16,7 +16,7 @@ interface PersistedSession {
     sessionId: string;
     sessionStartMs: number;
     lastActiveMs: number;
-    accumulatedCodingMs: number;
+    accumulatedCodingMs: number; 
 }
 
 export function startSessionTracking (context: vscode.ExtensionContext) {
