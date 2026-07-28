@@ -81,6 +81,7 @@ cd VSCodePlugin
 
 ```bash
 npm install
+npm install @opentelemetry/sdk-trace-base
 ```
 
 4. Open the project in VS Code:

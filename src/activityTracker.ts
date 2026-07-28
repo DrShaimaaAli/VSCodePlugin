@@ -3,14 +3,15 @@
 import * as vscode from 'vscode'; // This gives access to: editor events, documents, commands, windows, workspace, APIs
 import { logTelemetry, isTelemetryLogDocument, writeVerificationBufferLog } from './telemetry'; // Importing the logTelemetry function to use for logging telemetry events
 import * as cups from './cupsStateTracker';
+import { clearScreenDown } from 'readline';
 
 let totalEdits = 0; // Global variable to track total edits across all documents
 let totalSaves = 0; // Global variable to track total saves across all documents
 
-const AI_MIN_LINES = 3;
-const AI_MIN_CHARS = 50; 
+const PASTE_CHAR_THRESHOLD = 10;
 const POST_AI_IDLE_THRESHOLD = 30 * 1000; // 30 seconds
 const UNDO_ATTRIBUTION_THRESHOLD = 60 * 1000; // Number of undos after which we stop attributing to the AI suggestion
+const AI_INSERTION_WINDOW_MS = 3000; // 1-second window to catch bulk Chat "keep" or Inline Chat edits
 
 interface LineRange {startLine: number; endLine: number;} // Interface to represent a range of lines in a document, used for tracking changes and edits
 
@@ -68,26 +69,93 @@ function survivalScore(originalText: string, currentText: string): number {
 	const union = a.size + b.size - intersection;
 	return union === 0 ? 1 : intersection / union;
 }
+let postAIIdleTimer: NodeJS.Timeout | null = null; // Timer to track idle time after AI-generated code is detected
+let undoCountSinceAI = 0; // Counter to track the number of undo actions since AI-generated code was detected
+let lastAIInsertionCharCount = 0; // Variable to track the character count of the last AI-generated code insertion
+let trackingUndos = false; // Flag to indicate whether we are currently tracking undo actions after AI-generated code is detected
+let lastAiAcceptedEventId: string | null = null; // ParentEventID for reverts/idle tied to this acceptance
+let lastAiAcceptedTime: number | null = null; // Timestamp of the last AI-generated code acceptance, used to determine if subsequent edits are related to the AI suggestion
+let lastAiInsertionRange: LineRange | null = null; // Range of lines affected by the last AI-generated code insertion, used to determine if subsequent edits overlap with the AI suggestion
+let lastAiInsertionOriginalText: string | null = null; // The original inserted text, kept for survival score-comparison against what's there now
+let lastTrackedFile: string | null = null;
+
+// Contribution 3: "Scaffold Decay Rate" - cumulative AI-inserted vs. manually-typed characters,
+// flushed as a checkpoint on every save. short AI completions below the AI_MIN_LINES/AI_MIN_CHARS
+// threshold are indistinguishable from manual typing and get counted as
+// manual — same blind spot the acceptance heuristic itself has everywhere
+// else in this file, not a new one introduced here.
+
+let cumulativeAiChars = 0;
+let cumulativeManualChars = 0;
+
+// Pending AI insertion flag for Chat/Inline chat "Keep" clicks
+let pendingAiInsertionTimestamp = 0;
+
+// Called by OpenTelemetry processor when a Chat or Inline edit start span is detected
+export function registerPendingAiInsertion() {
+	pendingAiInsertionTimestamp = Date.now();
+}
+
+export function onAISuggestionAccepted (
+	file: string,
+	language: string,
+	acceptedText: string,
+	startLine : number,
+	otelSpanId: string
+) {
+	const charCount = acceptedText.length;
+	const lineCount = acceptedText.split('\n').length;
+	
+	cumulativeAiChars += charCount;
+	lastTrackedFile = file;
+
+	// Log the formal acceptance tied to the OTel event. otelSpanId is raw
+	// provenance from a different ID space than our own EventIDs — it does
+	// NOT belong in parentEventId (that field must always resolve to a real
+	// EventID in this table, which a foreign span ID never will).
+	const acceptedEvent = logTelemetry (
+		'X-AI.Suggestion.Accepted',
+		null,
+		{
+			insertedChars: charCount,
+			insertedLines: lineCount,
+			source: 'OTel.SpanProcessor',
+			otelSpanId
+		},
+		{
+			file,
+			language
+		}
+	);
+
+	lastAiAcceptedEventId = acceptedEvent.EventID; // remember it for any follow-up event
+	lastAiAcceptedTime = Date.now(); // remember it for any follow-up event
+	lastAiInsertionRange = {startLine, endLine: startLine + lineCount - 1}; // remember it for any follow-up event
+	lastAiInsertionOriginalText = acceptedText;
+
+	if (postAIIdleTimer) {
+		clearTimeout(postAIIdleTimer); // Clear any existing idle timer to reset the countdown for logging idle time after AI-generated code is detected
+	}
+	postAIIdleTimer = setTimeout(() => {
+			logTelemetry('X-AI.Suggestion.Idle', null, 
+			{
+				idleSeconds: POST_AI_IDLE_THRESHOLD / 1000,
+			},
+			{
+				file,
+				parentEventId: lastAiAcceptedEventId ?? undefined,
+				initiator: 'ToolTimedEvent', // fired by setTimeout, not a direct user action
+			});
+			postAIIdleTimer = null; // Reset the timer variable after logging idle time
+		}, POST_AI_IDLE_THRESHOLD);
+
+		// Reset undo tracking
+		undoCountSinceAI = 0;
+		lastAIInsertionCharCount = charCount;
+		trackingUndos = true;
+}
 
 export function startActivityTracking(context: vscode.ExtensionContext) {
-    let postAIIdleTimer: NodeJS.Timeout | null = null; // Timer to track idle time after AI-generated code is detected
-	let undoCountSinceAI = 0; // Counter to track the number of undo actions since AI-generated code was detected
-	let lastAIInsertionCharCount = 0; // Variable to track the character count of the last AI-generated code insertion
-	let trackingUndos = false; // Flag to indicate whether we are currently tracking undo actions after AI-generated code is detected
-	let lastAiAcceptedEventId: string | null = null; // ParentEventID for reverts/idle tied to this acceptance
-	let lastAiAcceptedTime: number | null = null; // Timestamp of the last AI-generated code acceptance, used to determine if subsequent edits are related to the AI suggestion
-	let lastAiInsertionRange: LineRange | null = null; // Range of lines affected by the last AI-generated code insertion, used to determine if subsequent edits overlap with the AI suggestion
-	let lastAiInsertionOriginalText: string | null = null; // The original inserted text, kept for survival score-comparison against what's there now
-
-	// Contribution 3: "Scaffold Decay Rate" - cumulative AI-inserted vs. manually-typed characters,
-	// flushed as a checkpoint on every save. short AI completions below the AI_MIN_LINES/AI_MIN_CHARS
-	// threshold are indistinguishable from manual typing and get counted as
-	// manual — same blind spot the acceptance heuristic itself has everywhere
-	// else in this file, not a new one introduced here.
-
-	let cumulativeAiChars = 0;
-	let cumulativeManualChars = 0;
-
 	// Adding event listeners to the extension's subscriptions to ensure they are properly disposed of when the extension is deactivated, 
 	// preventing memory leaks and ensuring clean resource management
 	context.subscriptions.push(
@@ -102,155 +170,144 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
 			}
 
 			const relFile = vscode.workspace.asRelativePath(event.document.uri, false);
-			const language = event.document.languageId;
 			
 			for (const change of event.contentChanges) {
 				const insertedText = change.text;
 				const lineCount = insertedText.split('\n').length;
 				const charCount = insertedText.length;
 
-				const isLikelyAISuggestion = lineCount >= AI_MIN_LINES && charCount >= AI_MIN_CHARS && change.rangeLength === 0; // Heuristic to identify potential AI-generated code based on the number of lines and characters inserted, and ensuring it's an insertion (not a replacement)
-				if (isLikelyAISuggestion) {
-					cumulativeAiChars += charCount;
-					// Log acceptance
-					const acceptedEvent = logTelemetry('X-AI.Suggestion.Accepted', null, 
-					{
-						insertedLines: lineCount,
-						insertedChars: charCount,
-					},
-					{
-						file: relFile,
-						language
-					}
-				);
-				lastAiAcceptedEventId = acceptedEvent.EventID; // remember it for any follow-up event
-				lastAiAcceptedTime = Date.now(); // remember it for any follow-up event
-				lastAiInsertionRange = {startLine: change.range.start.line, endLine: change.range.start.line + lineCount - 1}; // remember it for any follow-up event
-				lastAiInsertionOriginalText = insertedText;
+				if (charCount === 0) continue;
 
-				if (postAIIdleTimer) {
-					clearTimeout(postAIIdleTimer); // Clear any existing idle timer to reset the countdown for logging idle time after AI-generated code is detected
+				// Check if this edit was triggerd by an AI Chat "Keep" action
+				const isWithinAiWindow = (Date.now() - pendingAiInsertionTimestamp) <= AI_INSERTION_WINDOW_MS;
+
+				if (isWithinAiWindow) {
+					// Suppress paste detector for AI inserts; onAISuggestionAccepted will log the AI metrics
+					if (postAIIdleTimer) {
+						clearTimeout(postAIIdleTimer);
+						postAIIdleTimer = null;
+					}
+					continue;
 				}
-				postAIIdleTimer = setTimeout(() => {
-						logTelemetry('X-AI.Suggestion.Idle', null, 
+				
+				// Standard External Paste Detection
+				const isPaste = charCount >= PASTE_CHAR_THRESHOLD || lineCount > 1;
+
+				if (isPaste) {
+					logTelemetry(
+						'X-External.Paste',
+						null,
 						{
-							idleSeconds: POST_AI_IDLE_THRESHOLD / 1000,
+							pastedLines: lineCount,
+							pastedChars: charCount,
+							snippetHead: insertedText.slice(0, 50) // Store snippet preview if needed for manual research coding/ review
 						},
 						{
 							file: relFile,
-							parentEventId: lastAiAcceptedEventId ?? undefined,
-							initiator: 'ToolTimedEvent', // fired by setTimeout, not a direct user action
-						});
-						postAIIdleTimer = null; // Reset the timer variable after logging idle time
-					}, POST_AI_IDLE_THRESHOLD);
+							language: event.document.languageId,
+							initiator: 'UserDirectAction'
+						}
+					);
 
-					// Reset undo tracking
-                    undoCountSinceAI = 0;
-                    lastAIInsertionCharCount = charCount;
-                    trackingUndos = true;
+					continue; // Do NOT add to cumulativeManualChars
 				}
-				else {
-					if (postAIIdleTimer) {
-						clearTimeout(postAIIdleTimer); // Clear the idle timer if the user makes another edit before the idle threshold is reached, indicating they are actively working and not idle
-						postAIIdleTimer = null;
+
+				cumulativeManualChars += charCount;
+
+				if (postAIIdleTimer) {
+					clearTimeout(postAIIdleTimer); // Clear the idle timer if the user makes another edit before the idle threshold is reached, indicating they are actively working and not idle
+					postAIIdleTimer = null;
+				}
+				
+				let touchesSuggestion = false;
+				if (trackingUndos && relFile === lastTrackedFile) {
+					const withinWindow = lastAiAcceptedTime !== null && (Date.now() - lastAiAcceptedTime) <= UNDO_ATTRIBUTION_THRESHOLD;
+					if (!withinWindow) { // If the undo action occurs outside the attribution window, stop tracking undos and reset related variables
+						trackingUndos = false;
+						undoCountSinceAI = 0;
+						lastAiAcceptedEventId = null;
+						lastAiAcceptedTime = null;
+						lastAiInsertionRange = null;
+						lastAiInsertionOriginalText = null;
 					}
- 
-					if (charCount > 0) {
-						// Any non-empty insertion/replacement here is, by construction, NOT
-						// the AI-acceptance path (that's handled in the isLikelyAISuggestion
-						// branch above) — so this is manually-typed content.
-						cumulativeManualChars += charCount;
-					}
+					else {
+						const editStartLine = change.range.start.line;
+						const editEndLine = change.range.end.line;
+						const editInsertedLineCount = lineCount;
 
-					let touchesSuggestion = false;
-					if (trackingUndos) {
-						const withinWindow = lastAiAcceptedTime !== null && (Date.now() - lastAiAcceptedTime) <= UNDO_ATTRIBUTION_THRESHOLD;
-						if (!withinWindow) { // If the undo action occurs outside the attribution window, stop tracking undos and reset related variables
-							trackingUndos = false;
-							undoCountSinceAI = 0;
-							lastAiAcceptedEventId = null;
-							lastAiAcceptedTime = null;
-							lastAiInsertionRange = null;
-							lastAiInsertionOriginalText = null;
-						}
-						else {
-							const editStartLine = change.range.start.line;
-							const editEndLine = change.range.end.line;
-							const editInsertedLineCount = lineCount;
-
-							touchesSuggestion = lastAiInsertionRange !== null && rangesOverlap(lastAiInsertionRange, editStartLine, editEndLine);
-							const isUndo = change.text === '' && change.rangeLength > 0;
- 						
-							if(isUndo && touchesSuggestion){
-								undoCountSinceAI++;
-								const isFullRevert = change.rangeLength >= lastAIInsertionCharCount; // 
-								const revertEvent = logTelemetry('X-AI.Suggestion.Reverted', isFullRevert ? 'Full' : 'Partial',
-									{
-										undoCount: undoCountSinceAI,
-										removedChars: change.rangeLength,
-							
-									},
-									{
-										file: relFile,
-										parentEventId: lastAiAcceptedEventId ?? undefined,
-										editType: 'Undo',	
-									}
-								);
-								// cups.onEditDuringOrAfterSuggestion(relFile, revertEvent.EventID, revertEvent.ClientTimestamp);
-								if (isFullRevert) {
-									trackingUndos = false;
-									undoCountSinceAI = 0;
-									lastAiAcceptedEventId = null;
-									lastAiAcceptedTime = null;
-									lastAiInsertionRange = null;
-									lastAiInsertionOriginalText = null;
-								}
-								else if(lastAiInsertionRange){
-									// Partial revert, update the tracked range to reflect the new state of the document after the undo
-									lastAiInsertionRange = {startLine: lastAiInsertionRange.startLine, endLine: Math.max(lastAiInsertionRange.startLine, lastAiInsertionRange.endLine - (editEndLine - editStartLine))};
-								}
-								continue; // already logged + classified this change, skip the generic-edit check below
-								}
-
-								// Not an undo, but still touches the AI suggestion range, update the tracked range to reflect the new state of the document after the edit
-								if (lastAiInsertionRange) {
-									// Update the tracked range to reflect the new state of the document after the edit, ensuring that subsequent edits are correctly evaluated for overlap with the AI suggestion
-									lastAiInsertionRange = shiftRangeForEdit(lastAiInsertionRange, editStartLine, editEndLine, editInsertedLineCount);
-								}
-							}
-						}
-
-						if (touchesSuggestion && lastAiInsertionRange !== null && lastAiInsertionOriginalText !== null) {
-							const clampedEndLine = Math.min(lastAiInsertionRange.endLine, event.document.lineCount - 1);
-							const currentRangeText = event.document.getText(new vscode.Range(lastAiInsertionRange.startLine, 0, clampedEndLine + 1, 0));
-							const score = survivalScore(lastAiInsertionOriginalText, currentRangeText);
-							const survivalEvent = logTelemetry(
-								'X-AI.Suggestion.SurvivalCheck',
-								null,
-								{survivalScore: score},
+						touchesSuggestion = lastAiInsertionRange !== null && rangesOverlap(lastAiInsertionRange, editStartLine, editEndLine);
+						const isUndo = change.text === '' && change.rangeLength > 0;
+					
+						if(isUndo && touchesSuggestion){
+							undoCountSinceAI++;
+							const isFullRevert = change.rangeLength >= lastAIInsertionCharCount; // 
+							const revertEvent = logTelemetry('X-AI.Suggestion.Reverted', isFullRevert ? 'Full' : 'Partial',
+								{
+									undoCount: undoCountSinceAI,
+									removedChars: change.rangeLength,
+						
+								},
 								{
 									file: relFile,
 									parentEventId: lastAiAcceptedEventId ?? undefined,
-									editType: change.rangeLength > 0 ? "Replace" : "Insert"
+									editType: 'Undo',	
 								}
 							);
-							//cups.onSurvivalCheck(relFile, survivalEvent.EventID, survivalEvent.ClientTimestamp, score);
-						}
+							// cups.onEditDuringOrAfterSuggestion(relFile, revertEvent.EventID, revertEvent.ClientTimestamp);
+							if (isFullRevert) {
+								trackingUndos = false;
+								undoCountSinceAI = 0;
+								lastAiAcceptedEventId = null;
+								lastAiAcceptedTime = null;
+								lastAiInsertionRange = null;
+								lastAiInsertionOriginalText = null;
+							}
+							else if(lastAiInsertionRange){
+								// Partial revert, update the tracked range to reflect the new state of the document after the undo
+								lastAiInsertionRange = {startLine: lastAiInsertionRange.startLine, endLine: Math.max(lastAiInsertionRange.startLine, lastAiInsertionRange.endLine - (editEndLine - editStartLine))};
+							}
+							continue; // already logged + classified this change, skip the generic-edit check below
+							}
 
-					// Only emit a File.Edit event (and feed the classifier) when we're not
-                    // already in WritingNewCode — this bounds event volume to transition
-                    // boundaries instead of logging every keystroke.
-                    /*if (cups.getCurrentState() !== 'WritingNewCode') {
-                        const editType = charCount === 0 ? 'Delete' : (change.rangeLength > 0 ? 'Replace' : 'Insert');
-                        const editEvent = logTelemetry(
-                            'File.Edit',
-                            null,
-                            { lineCount, charCount },
-                            { file: relFile, language, editType }
-                        );
-                        cups.onGenericEdit(relFile, editEvent.EventID, editEvent.ClientTimestamp);
-                    }*/
-				}
+							// Not an undo, but still touches the AI suggestion range, update the tracked range to reflect the new state of the document after the edit
+							if (lastAiInsertionRange) {
+								// Update the tracked range to reflect the new state of the document after the edit, ensuring that subsequent edits are correctly evaluated for overlap with the AI suggestion
+								lastAiInsertionRange = shiftRangeForEdit(lastAiInsertionRange, editStartLine, editEndLine, editInsertedLineCount);
+							}
+						}
+					}
+
+					if (touchesSuggestion && lastAiInsertionRange !== null && lastAiInsertionOriginalText !== null) {
+						const clampedEndLine = Math.min(lastAiInsertionRange.endLine, event.document.lineCount - 1);
+						const currentRangeText = event.document.getText(new vscode.Range(lastAiInsertionRange.startLine, 0, clampedEndLine + 1, 0));
+						const score = survivalScore(lastAiInsertionOriginalText, currentRangeText);
+						const survivalEvent = logTelemetry(
+							'X-AI.Suggestion.SurvivalCheck',
+							null,
+							{survivalScore: score},
+							{
+								file: relFile,
+								parentEventId: lastAiAcceptedEventId ?? undefined,
+								editType: change.rangeLength > 0 ? "Replace" : "Insert"
+							}
+						);
+						//cups.onSurvivalCheck(relFile, survivalEvent.EventID, survivalEvent.ClientTimestamp, score);
+					}
+
+				// Only emit a File.Edit event (and feed the classifier) when we're not
+				// already in WritingNewCode — this bounds event volume to transition
+				// boundaries instead of logging every keystroke.
+				/*if (cups.getCurrentState() !== 'WritingNewCode') {
+					const editType = charCount === 0 ? 'Delete' : (change.rangeLength > 0 ? 'Replace' : 'Insert');
+					const editEvent = logTelemetry(
+						'File.Edit',
+						null,
+						{ lineCount, charCount },
+						{ file: relFile, language, editType }
+					);
+					cups.onGenericEdit(relFile, editEvent.EventID, editEvent.ClientTimestamp);
+				}*/
+				
 			}
 			totalEdits++;
 		})
