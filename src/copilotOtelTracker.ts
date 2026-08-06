@@ -2,11 +2,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { registerPendingAiInsertion, onAISuggestionAccepted } from './activityTracker';
+import { logTelemetry } from './telemetry';
 
 class CopilotOtelFileWatcher {
     private filePath: string;
     private fileOffset: number = 0;
-    private watcher: fs.FSWatcher | null = null;
     private lineBuffer: string = '';
 
     constructor(filePath: string) {
@@ -25,8 +25,10 @@ class CopilotOtelFileWatcher {
         const stats = fs.statSync(this.filePath);
         this.fileOffset = stats.size;
 
-        this.watcher = fs.watch(this.filePath, (eventType) => {
-            if (eventType === 'change') {
+        // Use watchFile instead of watch for guaranteed polling on appended logs
+        fs.watchFile(this.filePath, { interval: 1000 }, (curr, prev) => {
+            if (curr.size !== prev.size || curr.mtimeMs !== prev.mtimeMs) {
+                console.log("[DEBUG OTel] File changed event fired.");
                 this.readIncremental();
             }
         });
@@ -68,7 +70,7 @@ class CopilotOtelFileWatcher {
 
                     try {
                         const parsed = JSON.parse(trimmed);
-                        this.unwrapAndProcess(parsed);
+                        this.processSpan(parsed);
                     } catch (e) {
                         // Skip partial or non-JSON log lines
                     }
@@ -79,139 +81,115 @@ class CopilotOtelFileWatcher {
         }
     }
 
-    /**
-     * Unwraps standard OTLP JSON envelopes (resourceLogs/scopeLogs or resourceSpans/scopeSpans)
-     * down to individual record items before processing.
-     */
-    private unwrapAndProcess(rawObj: any) {
-        if (rawObj.resourceLogs || rawObj.resourceSpans) {
-            const items = rawObj.resourceLogs ?? rawObj.resourceSpans ?? [];
-            for (const item of items) {
-                const scopes = item.scopeLogs ?? item.scopeSpans ?? [];
-                for (const scope of scopes) {
-                    const records = scope.logRecords ?? scope.spans ?? [];
-                    for (const record of records) {
-                        this.processSpan(record);
-                    }
-                }
-            }
-        } else {
-            // Direct flat JSON record
-            this.processSpan(rawObj);
-        }
-    }
+    private static readonly EDIT_LIKE_TOOL_NAME = /\b(edit|replace|write|patch|insert|apply)(?:_(file|changes|edit|patch|snippet))?\b/i; // Heuristic regex to identify tool calls that likely result in code edits
 
-    private processSpan(span: any) {
-        const attributes = this.flattenAttributes(span.attributes ?? span.Attributes);
-
-        // Resolve event/span name across standard OTel property locations
-        const name: string = 
-            span.name ?? 
-            span.Name ?? 
-            span.body?.stringValue ?? 
-            attributes['event.name'] ?? 
-            attributes['gen_ai.operation.name'] ?? 
-            attributes['code.function'] ?? 
-            '';
-
-        const ACCEPTANCE_EVENT_NAMES = new Set([
-            'copilot_chat.edit.feedback',      // File-level agent edit accepted/rejected
-            'copilot_chat.edit.hunk.action',   // Individual hunk accepted/rejected
-            'copilot_chat.inline.done',        // Inline Chat (Ctrl+I) edit accepted/rejected
-            'copilot_chat.user.action.count',  // User engagement actions (insert/apply/copy)
-        ]);
-
-        const RELEVANT_SPAN_NAMES = new Set([
-            'invoke_agent', 
-            'chat', 
-            'execute_tool', 
-            'execute_hook'
-        ]);
-
-        const isRelevant = 
-            ACCEPTANCE_EVENT_NAMES.has(name) || 
-            RELEVANT_SPAN_NAMES.has(name) || 
-            name.includes('copilot') || 
-            name.includes('inlineChat') || 
-            name.includes('edit.survival');
-
-        if (!isRelevant) {
+    private processSpan(rec: any) {
+        console.log("[DEBUG OTel] Processing span:", rec.attributes?.['event.name']);
+        if ('scopeMetrics' in rec) { // This is a metrics record, not a span — ignore it
             return;
         }
 
-        // Arm suppression window early to mitigate latency before follow-up edit processing
-        registerPendingAiInsertion();
+        const attrs: Record<string, any> = rec.attributes;
+        const eventName: string | undefined = attrs['event.name'];
+        if (!eventName) {
+            return;
+        } 
 
-        if (!ACCEPTANCE_EVENT_NAMES.has(name)) {
-            return; // Relevant telemetry span, but not a specific acceptance event
+        if (eventName === 'copilot_chat.edit.hunk.action') {
+            registerPendingAiInsertion();
+            if (String(attrs['outcome']).toLowerCase() === 'accepted') {
+                this.logAcceptance(rec, {
+                    source: eventName,
+                    file: attrs['copilot_chat.file.relative_path'],
+                    language: attrs['language_id'],
+                    lineCount: attrs['line_count'],
+                    linesAdded: attrs['lines_added'],
+                    linesRemoved: attrs['lines_removed'],
+                });
+            }
+            return;
         }
 
-        // Check outcome via string keywords or boolean flags
-        const outcome = String(
-            attributes['outcome'] ?? attributes['action'] ?? attributes['result'] ?? ''
-        ).toLowerCase();
-
-        const isAcceptedBool = attributes['accepted'] === true || attributes['accepted'] === 'true';
-        const isAcceptance = isAcceptedBool || outcome.includes('accept') || outcome.includes('apply') || outcome.includes('insert');
-
-        if (!isAcceptance) {
-            return; // Rejected edit or hunk
+        if (eventName === 'copilot_chat.inline.done') {
+            registerPendingAiInsertion();
+            if (attrs['accepted'] === true || String(attrs['result']).toLowerCase() === 'accept') {
+                this.logAcceptance(rec, {
+                    source: eventName,
+                    language: attrs['language_id'],
+                    editCount: attrs['edit_count'],
+                    editLineCount: attrs['edit_line_count'],
+                    replyType: attrs['reply_type'],
+                });
+            }
+            return;
+        }
+ 
+        if (eventName === 'copilot_chat.edit.survival') {
+            // Not an acceptance — logged as our existing survival-check
+            // concept instead, since the fields line up almost exactly.
+            logTelemetry(
+                'X-AI.Suggestion.SurvivalCheck',
+                null,
+                {
+                    survivalScore: attrs['survival_rate_four_gram'],
+                    survivalRateNoRevert: attrs['survival_rate_no_revert'],
+                    timeDelayMs: attrs['time_delay_ms'],
+                    editSource: attrs['edit_source'],
+                    source: eventName,
+                },
+                { initiator: 'ToolReaction' }
+            );
+            return;
         }
 
-        this.logProgSnap2Acceptance(span, attributes);
+        if (eventName === 'copilot_chat.tool.call') {
+            const toolName = String(attrs['gen_ai.tool.name'] ?? '');
+            const succeeded = attrs['success'] === true;
+
+            console.log(`[DEBUG OTel] TOOL CALL FIRED! Name: "${toolName}", Success:`, succeeded);
+
+            if (succeeded && CopilotOtelFileWatcher.EDIT_LIKE_TOOL_NAME.test(toolName)) {
+                registerPendingAiInsertion();
+                this.logAcceptance(rec, { source: eventName, toolName });
+            }
+            return;
+        }
+ 
+        // Confirmed-real but not yet mapped to anything (session.start,
+        // agent.turn, inference.operation.details) — not silently dropped,
+        // logged generically for later inspection.
+        console.log(`[CodexLog OTel] Unmapped event.name: ${eventName}`, attrs);
+
     }
+    
 
-    private flattenAttributes(attrs: any): Record<string, any> {
-        if (!attrs) return {};
-        if (!Array.isArray(attrs)) return attrs; // Already a flat key-value object
-
-        const out: Record<string, any> = {};
-        for (const attr of attrs) {
-            if (!attr || !attr.key) continue;
-            const v = attr.value ?? {};
-            out[attr.key] = 
-                v.stringValue ?? 
-                v.intValue ?? 
-                v.doubleValue ?? 
-                v.boolValue ?? 
-                v.bytesValue ?? 
-                undefined;
-        }
-        return out;
-    }
-
-    private logProgSnap2Acceptance(span: any, attributes: Record<string, any>) {
+    private logAcceptance(rec: any, mapped: Record<string, any> = {}) {
         const editor = vscode.window.activeTextEditor;
 
-        // Fallback hierarchy for file path and language
-        const file = attributes['file_path'] ?? 
-            (editor ? vscode.workspace.asRelativePath(editor.document.uri, false) : 'unknown');
+        const file = mapped.file ?? (editor ? vscode.workspace.asRelativePath(editor.document.uri, false) : undefined);
+        const language = mapped.language ?? editor?.document.languageId ?? 'unknown';
+
+        if (!file) {
+            console.warn('[CodexLog OTel] Acceptance-like signal detected but no active editor — cannot attribute file/line.');
+            return;
+        }
         
-        const language = attributes['language_id'] ?? 
-            (editor ? editor.document.languageId : 'unknown');
-
-        const startLine = editor ? editor.selection.active.line : 0;
-
+        const startLine = editor?.selection.active.line ?? 0;
         let acceptedText = '';
-        if (editor) {
-            try {
-                acceptedText = editor.document.lineAt(startLine).text || '';
-            } catch {
-                acceptedText = '';
-            }
+        try {
+            acceptedText = editor ? (editor.document.lineAt(startLine).text ?? '') : '';
+        } catch {
+            acceptedText = '';
         }
 
-        const spanId: string = span.spanId ?? span.TraceId ?? span.spanContext?.()?.spanId ?? 'unknown';
-
+        const spanId: string = rec.spanContext?.spanId ?? 'unknown';
+ 
         onAISuggestionAccepted(file, language, acceptedText, startLine, spanId);
     }
 
     public stop() {
-        if (this.watcher) {
-            this.watcher.close();
-            this.watcher = null;
-        }
-    }
+        fs.unwatchFile(this.filePath);
+    } 
 }
 
 /**

@@ -9,7 +9,7 @@ import {logTelemetry, isTelemetryLogDocument, setSessionId} from './telemetry';
 import * as cups from './cupsStateTracker';
 
 const SESSION_STATE_KEY = 'codexlog.activeSession';
-const RESUME_THRESHOLD_MS = 10 * 1000; // 5-minute window for reloads/restarts
+const RESUME_THRESHOLD_MS = 5 * 60 * 1000; // 5-minute window for reloads/restarts
 const IDLETHRESHOLD = 2 * 60 * 1000; // 2 minutes
 
 interface PersistedSession {
@@ -23,6 +23,14 @@ export function startSessionTracking (context: vscode.ExtensionContext) {
     const now = Date.now();
     const storedSession = context.globalState.get<PersistedSession>(SESSION_STATE_KEY);
     
+    // Immediately update lastActiveMs so the session is not stale
+    context.globalState.update(SESSION_STATE_KEY, {
+        sessionId: storedSession?.sessionId ?? crypto.randomUUID(),
+        sessionStartMs: storedSession?.sessionStartMs ?? now,
+        lastActiveMs: now,
+        accumulatedCodingMs: storedSession?.accumulatedCodingMs ?? 0
+    });
+
     let sessionId: string;
     let sessionStartMs: number;
     let activeCodingTime = 0; // Time spent actively coding (not idle)
@@ -42,7 +50,8 @@ export function startSessionTracking (context: vscode.ExtensionContext) {
     } 
     else {
         if (storedSession) {
-            // Retroactively close the old abandoned session att its true last active time
+            // Retroactively close the old abandoned session at its true last active time
+            setSessionId(storedSession.sessionId); // Make telemetry use the old session ID BEFORE logging Session.End
             logTelemetry('Session.End', null, {
                 durationMinutes: Math.floor((storedSession.lastActiveMs - storedSession.sessionStartMs) / 60000),
                 activeCodingMinutes: Math.floor(storedSession.accumulatedCodingMs / 60000),
@@ -54,6 +63,7 @@ export function startSessionTracking (context: vscode.ExtensionContext) {
         activeCodingTime = 0;
         lastActivityTime = now;
         sessionId = vscode.env.sessionId || crypto.randomUUID();
+
         setSessionId(sessionId);
 
         logTelemetry('Session.Start', null, { workspace: vscode.workspace.name });
@@ -64,7 +74,7 @@ export function startSessionTracking (context: vscode.ExtensionContext) {
         context.globalState.update(SESSION_STATE_KEY, {
             sessionId,
             sessionStartMs,
-            lastActiveMs: Date.now(),
+            lastActiveMs: now,
             accumulatedCodingMs: activeCodingTime
         });
     }
