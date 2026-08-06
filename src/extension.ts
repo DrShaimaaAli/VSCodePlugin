@@ -1,12 +1,12 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode'; // This gives access to: editor events, documents, commands, windows, workspace, APIs
-import { startActivityTracking } from './activityTracker';
+import { startActivityTracking, registerPendingAiInsertion, onAISuggestionAccepted } from './activityTracker';
 import {isCopilotActive} from './detectCopilot';
 import {startSessionTracking} from './sessionTracker';
 import {startErrorTracking} from './errorTracking';
 import { registerAutomaticRuntimeTracker } from './runtimeTracker';
-import {initTelemetry, getLogFilePath, getVerificationBufferFilePath} from './telemetry';
+import {initTelemetry, getLogFilePath, getVerificationBufferFilePath } from './telemetry';
 import { startCopilotOtelTracking } from './copilotOtelTracker';
 import path from 'path';
 
@@ -67,6 +67,33 @@ export function activate(context: vscode.ExtensionContext) {
 		});
 	});
 	context.subscriptions.push(openVerificationBufferCommand);
+
+const interceptGhostText = vscode.commands.registerCommand('codexlog.acceptInlineSuggestion', async () => {
+        const editor = vscode.window.activeTextEditor;
+        const fileFallback = editor ? vscode.workspace.asRelativePath(editor.document.uri, false) : 'unknown';
+        const languageFallback = editor?.document.languageId ?? 'unknown';
+        const startLine = editor?.selection.active.line ?? 0;
+
+        // 1. Tell your synchronous document listener that an AI edit is imminent
+        registerPendingAiInsertion();
+
+        // 2. Force VS Code to accept the ghost text
+        await vscode.commands.executeCommand('editor.action.inlineSuggest.commit');
+
+        // 3. Route it through your existing AI acceptance logic.
+        // We pass an empty string for text and a hardcoded ID for OTel because 
+        // onAISuggestionAccepted will automatically claim the true text and 
+        // counts from the paste reconciliation queue.
+        onAISuggestionAccepted(
+            fileFallback, 
+            languageFallback, 
+            "", // The queue will overwrite this with the real inserted text
+            startLine, 
+            "ghost-text-inline" // Custom ID to distinguish from OTel spans
+        );
+    });
+
+    context.subscriptions.push(interceptGhostText);
 }
 
 // This method is called when your extension is deactivated

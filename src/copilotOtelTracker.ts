@@ -109,36 +109,13 @@ class CopilotOtelFileWatcher {
             }
             return;
         }
-
-        if (eventName === 'copilot_chat.inline.done') {
-            registerPendingAiInsertion();
-            if (attrs['accepted'] === true || String(attrs['result']).toLowerCase() === 'accept') {
-                this.logAcceptance(rec, {
-                    source: eventName,
-                    language: attrs['language_id'],
-                    editCount: attrs['edit_count'],
-                    editLineCount: attrs['edit_line_count'],
-                    replyType: attrs['reply_type'],
-                });
-            }
-            return;
-        }
  
         if (eventName === 'copilot_chat.edit.survival') {
-            // Not an acceptance — logged as our existing survival-check
-            // concept instead, since the fields line up almost exactly.
-            logTelemetry(
-                'X-AI.Suggestion.SurvivalCheck',
-                null,
-                {
-                    survivalScore: attrs['survival_rate_four_gram'],
-                    survivalRateNoRevert: attrs['survival_rate_no_revert'],
-                    timeDelayMs: attrs['time_delay_ms'],
-                    editSource: attrs['edit_source'],
-                    source: eventName,
-                },
-                { initiator: 'ToolReaction' }
-            );
+            return;
+        }
+
+        // Only proceed if it is an actual edit action (e.g., tool call success)
+        if (eventName !== 'copilot_chat.tool.call') {
             return;
         }
 
@@ -182,7 +159,7 @@ class CopilotOtelFileWatcher {
             acceptedText = '';
         }
 
-        const spanId: string = rec.spanContext?.spanId ?? 'unknown';
+        const spanId: string = 'hunk_acceptance';
  
         onAISuggestionAccepted(file, language, acceptedText, startLine, spanId);
     }
