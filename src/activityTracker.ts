@@ -89,6 +89,18 @@ function schedulePasteCandidate(file: string, language: string, lineCount: numbe
 	const timer = setTimeout(() => {
 		pendingPasteCandidates = pendingPasteCandidates.filter(c => c.timer !== timer);
 		// Paste silently dropped if not claimed by AI
+
+		logTelemetry(
+			'X-External.Paste',
+			null,
+			{
+				insertedChars: charCount,
+				insertedLines: lineCount,
+				file: file,
+				language: language
+			},
+			{ initiator: 'UserDirectAction' }
+		);
 	}, PASTE_RECONCILE_DELAY_MS);
 
 	pendingPasteCandidates.push({ file, language, lineCount, charCount, insertedText, timer });
@@ -124,31 +136,31 @@ export function onAISuggestionAccepted (
 	otelSpanId: string
 ) {
 	const claimedPaste = claimPendingPasteCandidate(fileFallback);
-    
-    // UPDATE: Inherit the TRUE file and language from the synchronous queue event
+
+	// Inherit the TRUE file and language from the synchronous queue event
     const file = claimedPaste ? claimedPaste.file : fileFallback;
     const language = claimedPaste ? claimedPaste.language : languageFallback;
 	const charCount = claimedPaste ? claimedPaste.charCount : acceptedText.length;
 	const lineCount = claimedPaste ? claimedPaste.lineCount : acceptedText.split('\n').length;
 	const fullInsertedText = claimedPaste ? claimedPaste.insertedText : acceptedText;
 
-    // Safety net: Never log the telemetry file itself
-    if (file.includes('telemetry.json')) return;
+	if (file.includes('telemetry.json')) return; // Ignore telemetry log edits
 
 	cumulativeAiChars += charCount;
 	lastTrackedFile = file;
 
-	const acceptedEvent = logTelemetry (
-		'X-AI.Suggestion.Accepted',
-		null,
-		{
-			insertedChars: charCount,
-			insertedLines: lineCount,
-			source: 'OTel.SpanProcessor',
-			otelSpanId
-		},
-		{ file, language }
-	);
+    // 4. Log the AI event as normal
+    const acceptedEvent = logTelemetry(
+        'X-AI.Suggestion.Accepted',
+        null,
+        {
+            insertedChars: charCount,
+            insertedLines: lineCount,
+            source: 'OTel.SpanProcessor',
+            otelSpanId
+        },
+        { file, language, initiator: 'UserDirectAction' }
+    );
 
 	lastAiAcceptedEventId = acceptedEvent.EventID; 
 	lastAiAcceptedTime = Date.now(); 
