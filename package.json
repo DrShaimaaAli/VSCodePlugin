@@ -9,9 +9,18 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
+    "keybindings": [
+      {
+        "command": "codexlog.acceptInlineSuggestion",
+        "key": "tab",
+        "when": "inlineSuggestionVisible && !editorHoverFocused && !editorTabMovesFocus"
+      }
+    ],
     "commands": [
       {
         "command": "codexlog.helloWorld",
@@ -52,5 +61,8 @@
     "eslint": "^9.39.3",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.1"
+  },
+  "dependencies": {
+    "@opentelemetry/sdk-trace-base": "^2.10.0"
   }
 }

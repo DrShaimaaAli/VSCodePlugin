@@ -17,15 +17,15 @@ export type EventType =
     | 'File.Close'
     | 'File.Edit'
     | 'File.Save'
-    | 'X-Diagnostics.Check' // renamed from misuse of 'Compile'
-    | 'X-AI.Suggestion.SurvivalCheck'
-    | 'Compile'
+    | 'X-Diagnostics.Check' // renamed from misuse of 'Compile' — this fires on every save as a passive linter/diagnostics snapshot, not an actual compile action
+    | 'Compile' // reserved for genuine build/compile task runs (e.g. tsc, make), detected via vscode.tasks — see runtimeTracker.ts startAutoRunTracking()
     | 'Run.Program'
     | 'X-AI.Suggestion.Accepted'
     | 'X-AI.Suggestion.Reverted'
-    | 'X-AI.Suggestion.SurvivalCheck' // continuous 0-1 similarity score, inspired by Copilot's own edit.Survival. * OTel metrics
-    | 'X-AI.RegretWindow.Summary'
-    | 'X-Scaffold.DecayCheckpoint'
+    | 'X-AI.Suggestion.SurvivalCheck' // continuous 0-1 similarity score, inspired by Copilot's own edit.survival.* OTel metrics — catches replacements, not just deletions
+    | 'X-AI.RegretWindow.Summary' // tallies ALL deletions in a fixed window after acceptance, regardless of location — broader signal than the range-scoped revert tracking above
+    | 'X-External.Paste' // large/multi-line insertion NOT flagged as AI acceptance by the OTel path — could be a real clipboard paste, or AI assistance the OTel signal missed
+    | 'X-Scaffold.DecayCheckpoint' // cumulative AI-inserted vs manually-typed character ratio, flushed per save — see Contribution 3
     | 'X-AI.Suggestion.Idle'
     | 'X-Error.Introduced'
     | 'X-Error.Resolved'
@@ -160,4 +160,3 @@ export interface ProgrammerState {
     EndTime: string | null;       // ISO 8601, null if still open
     DurationMs: number | null;    // null while open
 }
- 
