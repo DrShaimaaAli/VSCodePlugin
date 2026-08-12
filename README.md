@@ -158,18 +158,17 @@ Once the Extension Development Host is running, you can exercise the full teleme
 
 ### 5. AI suggestion acceptance, survival, and revert
 
-- In an editor, insert a large block of text as a single insertion (for example, 3 or more lines and 50+ characters).
-- This should be treated as a likely AI suggestion and logged as X-AI.Suggestion.Accepted.
-- Wait about 30 seconds after the accepted suggestion without further edits.
-- The extension should log X-AI.Suggestion.Idle.
-- Immediately after the acceptance, use Undo on the inserted block.
-- If the undo targets the suggestion range, the extension should log X-AI.Suggestion.Reverted as either Full or Partial.
-- To test the new survival metric, make a follow-up edit that touches the inserted block after the acceptance event:
-  - keep most of the text intact for a high survival score
-  - replace part of the block with different text for a lower score
-  - delete most of the block for a very low score
-- The extension should then log X-AI.Suggestion.SurvivalCheck with a survivalScore value in the event payload.
-- A new regret-window summary is also available as a post-hoc signal. After an AI suggestion is accepted, the extension tracks follow-up deletions during a short window and emits X-AI.RegretWindow.Summary. This metric is best treated as an optional, heuristic analysis layer rather than a definitive measure of confusion or regret, because it can be noisy and may over- or under-count depending on how the user edits the document later.
+Accepting an AI completion fires X-AI.Suggestion.Accepted and moves CUPS state to VerifyingSuggestion.
+
+- Undo / Revert Tracking:
+  - Performing a full Ctrl+Z or selecting and deleting the entire insertion logs X-AI.Suggestion.Reverted (Full).
+  - Character-by-character backspacing adjusts the tracked line ranges dynamically without spamming revert logs.
+
+- Debounced Survival Checks:
+  - Modifying AI-generated text triggers a debounced (1.5-second) survival check (X-AI.Suggestion.SurvivalCheck), logging an n-gram Jaccard similarity score.
+  - Short strings (<4 characters) automatically use exact normalized string matching to avoid false 100% survival scores.
+  - If survival score drops below 0.5, CUPS state transitions to EditingSuggestion.
+  
 - A new command, CodexLog: Open Verification Buffer Log, opens the generated verification-buffer file for inspecting derived timing metrics such as bufferMs.
 
 ### 6. Scaffold decay rate
