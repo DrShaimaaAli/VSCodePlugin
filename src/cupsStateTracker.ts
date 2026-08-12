@@ -77,11 +77,21 @@ export function getCurrentState(): CupsState | null {
     return current?.state ?? null;
 }
 
+export function onRunOrCompileError(file: string, eventId: string, time: string) {
+    transition('DebuggingTesting', file, eventId, time);
+}
+
 // Called on Session.End so the final open segment doesn't get lost
 export function closeCurrentState() {
     if (current) {
         const now = new Date().toISOString();
         recordClosedState(current.state, current.file, current.startEventId, current.startTime, null, now);
         current = null;
+    }
+}
+
+export function onSurvivalCheck(file: string, eventId: string, time: string, score: number) {
+    if (score < 0.5) {
+        transition('EditingSuggestion', file, eventId, time);
     }
 }

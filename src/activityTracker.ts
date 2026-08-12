@@ -1,7 +1,9 @@
-// This file contains the main logic for the VSCode extension, including event listeners for tracking user activity and logging telemetry data
+// Refactored VSCode extension main activity tracking logic
 
 import * as vscode from 'vscode'; 
 import { logTelemetry, isTelemetryLogDocument, writeVerificationBufferLog } from './telemetry'; 
+import * as cups from './cupsStateTracker';
+import { CupsState, EditType } from './types';
 
 let totalEdits = 0; 
 let totalSaves = 0; 
@@ -11,56 +13,63 @@ const POST_AI_IDLE_THRESHOLD = 30 * 1000;
 const UNDO_ATTRIBUTION_THRESHOLD = 60 * 1000; 
 const AI_INSERTION_WINDOW_MS = 3000; 
 const PASTE_RECONCILE_DELAY_MS = 3000;
+const SURVIVAL_CHECK_DEBOUNCE_MS = 1500;
 
-interface LineRange {startLine: number; endLine: number;} 
+interface LineRange { startLine: number; endLine: number; } 
 
 function rangesOverlap(range: LineRange, editStartLine: number, editEndLine: number): boolean {
-	return editStartLine <= range.endLine && editEndLine >= range.startLine; 
+    return editStartLine <= range.endLine && editEndLine >= range.startLine; 
 }
 
 function shiftRangeForEdit(range: LineRange, editStartLine: number, editEndLine: number, insertedLineCount: number): LineRange {
-	const netLineDelta = insertedLineCount - (editEndLine - editStartLine + 1); 
-	if (editEndLine < range.startLine) {
-		return {
-			startLine: range.startLine + netLineDelta,
-			endLine: range.endLine + netLineDelta
-		};
-	}
-	if (editStartLine > range.endLine){
-		return range; 
-	}
-	return range;
+    const netLineDelta = insertedLineCount - (editEndLine - editStartLine + 1); 
+    if (editEndLine < range.startLine) {
+        return {
+            startLine: range.startLine + netLineDelta,
+            endLine: range.endLine + netLineDelta
+        };
+    }
+    if (editStartLine > range.endLine) {
+        return range; 
+    }
+    return range;
 }
 
 function ngrams(text: string, n = 4): Set<string> {
-	const grams = new Set<string>();
-	const normalized = text.replace(/\s+/g, ' ').trim();
-	for (let i = 0; i <= normalized.length - n; i++) {
-		grams.add(normalized.slice(i, i + n));
-	}
-	return grams;
+    const grams = new Set<string>();
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    for (let i = 0; i <= normalized.length - n; i++) {
+        grams.add(normalized.slice(i, i + n));
+    }
+    return grams;
 }
 
 function survivalScore(originalText: string, currentText: string): number {
-	if (originalText.length === 0 && currentText.length === 0) {
-		return 1;
-	}
-	const a = ngrams(originalText);
-	const b = ngrams(currentText);
-	if (a.size === 0 || b.size === 0) {
-		return a.size === b.size ? 1 : 0;
-	}
-	let intersection = 0;
-	for (const gram of a) {
-		if (b.has(gram)) {
-			intersection++;
-		}
-	}
-	const union = a.size + b.size - intersection;
-	return union === 0 ? 1 : intersection / union;
+    const normOrig = originalText.replace(/\s+/g, ' ').trim();
+    const normCurr = currentText.replace(/\s+/g, ' ').trim();
+
+    if (normOrig === normCurr) return 1;
+    if (normOrig.length === 0 || normCurr.length === 0) return 0;
+
+    // Fallback for short strings (<4 chars) where n-grams cannot be generated
+    if (normOrig.length < 4 || normCurr.length < 4) {
+        return normOrig === normCurr ? 1 : 0;
+    }
+
+    const a = ngrams(normOrig);
+    const b = ngrams(normCurr);
+    if (a.size === 0 || b.size === 0) return 0;
+
+    let intersection = 0;
+    for (const gram of a) {
+        if (b.has(gram)) intersection++;
+    }
+    const union = a.size + b.size - intersection;
+    return union === 0 ? 1 : intersection / union;
 }
 
 let postAIIdleTimer: NodeJS.Timeout | null = null; 
+let survivalCheckTimer: NodeJS.Timeout | null = null;
 let undoCountSinceAI = 0; 
 let lastAIInsertionCharCount = 0; 
 let trackingUndos = false; 
@@ -76,44 +85,39 @@ let pendingAiInsertionTimestamp = 0;
 
 // --- Paste/AI reconciliation queue ---------------------------------------
 interface PendingPasteCandidate {
-	file: string;
-	language: string;
-	lineCount: number;
-	charCount: number;
-	insertedText: string;
-	timer: NodeJS.Timeout;
+    file: string;
+    language: string;
+    lineCount: number;
+    charCount: number;
+    insertedText: string;
+    timer: NodeJS.Timeout;
 }
 let pendingPasteCandidates: PendingPasteCandidate[] = [];
 
 function schedulePasteCandidate(file: string, language: string, lineCount: number, charCount: number, insertedText: string) {
-	const timer = setTimeout(() => {
-		pendingPasteCandidates = pendingPasteCandidates.filter(c => c.timer !== timer);
-		// Paste silently dropped if not claimed by AI
+    const timer = setTimeout(() => {
+        pendingPasteCandidates = pendingPasteCandidates.filter(c => c.timer !== timer);
 
-		logTelemetry(
-			'X-External.Paste',
-			null,
-			{
-				insertedChars: charCount,
-				insertedLines: lineCount,
-				file: file,
-				language: language
-			},
-			{ initiator: 'UserDirectAction' }
-		);
-	}, PASTE_RECONCILE_DELAY_MS);
+        logTelemetry(
+            'X-External.Paste',
+            null,
+            {
+                insertedChars: charCount,
+                insertedLines: lineCount,
+                file: file,
+                language: language
+            },
+            { initiator: 'UserDirectAction' }
+        );
+    }, PASTE_RECONCILE_DELAY_MS);
 
-	pendingPasteCandidates.push({ file, language, lineCount, charCount, insertedText, timer });
+    pendingPasteCandidates.push({ file, language, lineCount, charCount, insertedText, timer });
 }
 
-// UPDATE: Aggressive claiming. If the fileHint fails (due to activeTextEditor shifting), 
-// just grab the most recent large paste in the queue regardless of file name.
 function claimPendingPasteCandidate(fileHint: string): PendingPasteCandidate | undefined {
     if (pendingPasteCandidates.length === 0) return undefined;
 
     let idx = pendingPasteCandidates.findIndex(c => c.file === fileHint);
-    
-    // If strict match fails, assume the OTel fallback was wrong and grab the latest edit
     if (idx === -1) {
         idx = pendingPasteCandidates.length - 1;
     }
@@ -124,32 +128,59 @@ function claimPendingPasteCandidate(fileHint: string): PendingPasteCandidate | u
     return candidate;
 }
 
-export function registerPendingAiInsertion() {
-	pendingAiInsertionTimestamp = Date.now();
+function scheduleSurvivalCheck(relFile: string, document: vscode.TextDocument, editType: EditType) {
+    if (survivalCheckTimer) clearTimeout(survivalCheckTimer);
+    
+    survivalCheckTimer = setTimeout(() => {
+        if (!lastAiInsertionRange || !lastAiInsertionOriginalText) return;
+
+        const clampedEndLine = Math.min(lastAiInsertionRange.endLine, document.lineCount - 1);
+        const currentRangeText = document.getText(new vscode.Range(lastAiInsertionRange.startLine, 0, clampedEndLine + 1, 0));
+        const score = survivalScore(lastAiInsertionOriginalText, currentRangeText);
+
+        const survivalEvent = logTelemetry(
+            'X-AI.Suggestion.SurvivalCheck',
+            null,
+            { survivalScore: score },
+            {
+                file: relFile,
+                parentEventId: lastAiAcceptedEventId ?? undefined,
+                editType
+            }
+        );
+
+        // State-gated CUPS notification
+        const currentState = cups.getCurrentState();
+        if (currentState === 'VerifyingSuggestion' || currentState === 'EditingSuggestion') {
+            cups.onSurvivalCheck?.(relFile, survivalEvent.EventID, survivalEvent.ClientTimestamp, score);
+        }
+    }, SURVIVAL_CHECK_DEBOUNCE_MS);
 }
 
-export function onAISuggestionAccepted (
-	fileFallback: string,
-	languageFallback: string,
-	acceptedText: string,
-	startLine : number,
-	otelSpanId: string
-) {
-	const claimedPaste = claimPendingPasteCandidate(fileFallback);
+export function registerPendingAiInsertion() {
+    pendingAiInsertionTimestamp = Date.now();
+}
 
-	// Inherit the TRUE file and language from the synchronous queue event
+export function onAISuggestionAccepted(
+    fileFallback: string,
+    languageFallback: string,
+    acceptedText: string,
+    startLine: number,
+    otelSpanId: string
+) {
+    const claimedPaste = claimPendingPasteCandidate(fileFallback);
+
     const file = claimedPaste ? claimedPaste.file : fileFallback;
     const language = claimedPaste ? claimedPaste.language : languageFallback;
-	const charCount = claimedPaste ? claimedPaste.charCount : acceptedText.length;
-	const lineCount = claimedPaste ? claimedPaste.lineCount : acceptedText.split('\n').length;
-	const fullInsertedText = claimedPaste ? claimedPaste.insertedText : acceptedText;
+    const charCount = claimedPaste ? claimedPaste.charCount : acceptedText.length;
+    const lineCount = claimedPaste ? claimedPaste.lineCount : acceptedText.split('\n').length;
+    const fullInsertedText = claimedPaste ? claimedPaste.insertedText : acceptedText;
 
-	if (file.includes('telemetry.json')) return; // Ignore telemetry log edits
+    if (file.includes('telemetry.json')) return;
 
-	cumulativeAiChars += charCount;
-	lastTrackedFile = file;
+    cumulativeAiChars += charCount;
+    lastTrackedFile = file;
 
-    // 4. Log the AI event as normal
     const acceptedEvent = logTelemetry(
         'X-AI.Suggestion.Accepted',
         null,
@@ -162,172 +193,259 @@ export function onAISuggestionAccepted (
         { file, language, initiator: 'UserDirectAction' }
     );
 
-	lastAiAcceptedEventId = acceptedEvent.EventID; 
-	lastAiAcceptedTime = Date.now(); 
-	lastAiInsertionRange = {startLine, endLine: startLine + lineCount - 1}; 
-	lastAiInsertionOriginalText = fullInsertedText; 
+    cups.onAISuggestionAccepted(file, acceptedEvent.EventID, acceptedEvent.ClientTimestamp);
 
-	if (postAIIdleTimer) {
-		clearTimeout(postAIIdleTimer); 
-	}
-	postAIIdleTimer = setTimeout(() => {
-			logTelemetry('X-AI.Suggestion.Idle', null, 
-			{ idleSeconds: POST_AI_IDLE_THRESHOLD / 1000 },
-			{ file, parentEventId: lastAiAcceptedEventId ?? undefined, initiator: 'ToolTimedEvent' });
-			postAIIdleTimer = null; 
-		}, POST_AI_IDLE_THRESHOLD);
+    lastAiAcceptedEventId = acceptedEvent.EventID; 
+    lastAiAcceptedTime = Date.now(); 
+    lastAiInsertionRange = { startLine, endLine: startLine + lineCount - 1 }; 
+    lastAiInsertionOriginalText = fullInsertedText; 
 
-		undoCountSinceAI = 0;
-		lastAIInsertionCharCount = charCount;
-		trackingUndos = true;
+    if (postAIIdleTimer) clearTimeout(postAIIdleTimer); 
+    postAIIdleTimer = setTimeout(() => {
+        logTelemetry('X-AI.Suggestion.Idle', null, 
+            { idleSeconds: POST_AI_IDLE_THRESHOLD / 1000 },
+            { file, parentEventId: lastAiAcceptedEventId ?? undefined, initiator: 'ToolTimedEvent' });
+        postAIIdleTimer = null; 
+    }, POST_AI_IDLE_THRESHOLD);
+
+    undoCountSinceAI = 0;
+    lastAIInsertionCharCount = charCount;
+    trackingUndos = true;
 }
 
 export function startActivityTracking(context: vscode.ExtensionContext) {
-	context.subscriptions.push(
-		vscode.workspace.onDidChangeTextDocument((event) => {
-			if (isTelemetryLogDocument(event.document.uri)) return;
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeTextDocument((event) => {
+            if (isTelemetryLogDocument(event.document.uri)) return;
+            if (event.document.uri.scheme !== 'file') return;
 
-			const relFile = vscode.workspace.asRelativePath(event.document.uri, false);
-			const isWithinAiWindow = (Date.now() - pendingAiInsertionTimestamp) <= AI_INSERTION_WINDOW_MS;
+            const relFile = vscode.workspace.asRelativePath(event.document.uri, false);
+            const normLastTrackedFile = lastTrackedFile ? vscode.workspace.asRelativePath(lastTrackedFile, false) : null;
+            
+            const touchesSuggestion = (change: vscode.TextDocumentContentChangeEvent): boolean => {
+                if (!lastAiInsertionRange) return false;
+                return rangesOverlap(lastAiInsertionRange, change.range.start.line, change.range.end.line);
+            };
 
-			for (const change of event.contentChanges) {
-				const insertedText = change.text;
-				const lineCount = insertedText.split('\n').length;
-				const charCount = insertedText.length;
+            // 1. NATIVE CTRL+Z / UNDO DETECTION (Range-Aware)
+            const isNativeUndo = event.reason === vscode.TextDocumentChangeReason.Undo;
+            if (isNativeUndo) {
+                const now = Date.now();
+                const withinWindow = lastAiAcceptedTime !== null && (now - lastAiAcceptedTime) <= UNDO_ATTRIBUTION_THRESHOLD;
 
-				if (charCount === 0) continue;
-				
-				// UPDATE: If we are in the AI window, automatically queue it even if it's small
-				const isPaste = charCount >= PASTE_CHAR_THRESHOLD || lineCount > 1 || isWithinAiWindow;
+                if (trackingUndos && normLastTrackedFile === relFile && withinWindow) {
+                    const overlapsAiSuggestion = event.contentChanges.some(touchesSuggestion);
+                    
+                    if (overlapsAiSuggestion) {
+                        undoCountSinceAI++;
+                        
+                        const revertEvent = logTelemetry(
+                            'X-AI.Suggestion.Reverted',
+                            'Full',
+                            {
+                                undoCount: undoCountSinceAI,
+                                reason: 'Ctrl+Z'
+                            },
+                            {
+                                file: relFile,
+                                parentEventId: lastAiAcceptedEventId ?? undefined,
+                                editType: 'Undo',
+                            }
+                        );
 
-				if (isPaste) {
-					schedulePasteCandidate(
-						relFile,
-						event.document.languageId,
-						lineCount,
-						charCount,
-						insertedText
-					);
-					if (postAIIdleTimer) {
-						clearTimeout(postAIIdleTimer);
-						postAIIdleTimer = null;
-					}
-					continue; 
-				}
+                        // State-gated CUPS transition
+                        const currentState = cups.getCurrentState();
+                        if (currentState === 'VerifyingSuggestion' || currentState === 'EditingSuggestion') {
+                            cups.onEditDuringOrAfterSuggestion(relFile, revertEvent.EventID, revertEvent.ClientTimestamp);
+                        }
 
-				cumulativeManualChars += charCount;
+                        // Reset tracking state
+                        trackingUndos = false;
+                        undoCountSinceAI = 0;
+                        lastAiAcceptedEventId = null;
+                        lastAiAcceptedTime = null;
+                        lastAiInsertionRange = null;
+                        lastAiInsertionOriginalText = null;
+                    }
+                }
+                return;
+            }
 
-				if (postAIIdleTimer) {
-					clearTimeout(postAIIdleTimer); 
-					postAIIdleTimer = null;
-				}
-				
-				let touchesSuggestion = false;
-				if (trackingUndos && relFile === lastTrackedFile) {
-					const withinWindow = lastAiAcceptedTime !== null && (Date.now() - lastAiAcceptedTime) <= UNDO_ATTRIBUTION_THRESHOLD;
-					if (!withinWindow) { 
-						trackingUndos = false;
-						undoCountSinceAI = 0;
-						lastAiAcceptedEventId = null;
-						lastAiAcceptedTime = null;
-						lastAiInsertionRange = null;
-						lastAiInsertionOriginalText = null;
-					} else {
-						const editStartLine = change.range.start.line;
-						const editEndLine = change.range.end.line;
-						const editInsertedLineCount = lineCount;
+            const isWithinAiWindow = (Date.now() - pendingAiInsertionTimestamp) <= AI_INSERTION_WINDOW_MS;
+            const isJustAcceptedAI = lastAiAcceptedTime !== null && (Date.now() - lastAiAcceptedTime) <= 2000;
 
-						touchesSuggestion = lastAiInsertionRange !== null && rangesOverlap(lastAiInsertionRange, editStartLine, editEndLine);
-						const isUndo = change.text === '' && change.rangeLength > 0;
-					
-						if(isUndo && touchesSuggestion){
-							undoCountSinceAI++;
-							const isFullRevert = change.rangeLength >= lastAIInsertionCharCount; 
-							const revertEvent = logTelemetry('X-AI.Suggestion.Reverted', isFullRevert ? 'Full' : 'Partial',
-								{
-									undoCount: undoCountSinceAI,
-									removedChars: change.rangeLength,
-								},
-								{
-									file: relFile,
-									parentEventId: lastAiAcceptedEventId ?? undefined,
-									editType: 'Undo',	
-								}
-							);
-							if (isFullRevert) {
-								trackingUndos = false;
-								undoCountSinceAI = 0;
-								lastAiAcceptedEventId = null;
-								lastAiAcceptedTime = null;
-								lastAiInsertionRange = null;
-								lastAiInsertionOriginalText = null;
-							} else if(lastAiInsertionRange){
-								lastAiInsertionRange = {startLine: lastAiInsertionRange.startLine, endLine: Math.max(lastAiInsertionRange.startLine, lastAiInsertionRange.endLine - (editEndLine - editStartLine))};
-							}
-							continue; 
-						}
+            for (const change of event.contentChanges) {
+                const insertedText = change.text;
+                const lineCount = insertedText.split('\n').length;
+                const charCount = insertedText.length;
+                const isDeletion = change.text === '' && change.rangeLength > 0;
 
-						if (lastAiInsertionRange) {
-							lastAiInsertionRange = shiftRangeForEdit(lastAiInsertionRange, editStartLine, editEndLine, editInsertedLineCount);
-						}
-					}
-				}
+                // 2. CHECK UNDOS / MANUAL REVERTS FIRST
+                if (isDeletion) {
+                    if (trackingUndos && relFile === normLastTrackedFile) {
+                        const withinWindow = lastAiAcceptedTime !== null && (Date.now() - lastAiAcceptedTime) <= UNDO_ATTRIBUTION_THRESHOLD;
+                        
+                        if (withinWindow && touchesSuggestion(change)) {
+                            const isFullRevert = change.rangeLength >= lastAIInsertionCharCount; 
+                            
+                            if (isFullRevert) {
+                                undoCountSinceAI++;
+                                const revertEvent = logTelemetry(
+                                    'X-AI.Suggestion.Reverted', 
+                                    'Full',
+                                    {
+                                        undoCount: undoCountSinceAI,
+                                        removedChars: change.rangeLength,
+                                    },
+                                    {
+                                        file: relFile,
+                                        parentEventId: lastAiAcceptedEventId ?? undefined,
+                                        editType: 'Undo' as EditType, 
+                                    }
+                                );
 
-				if (touchesSuggestion && lastAiInsertionRange !== null && lastAiInsertionOriginalText !== null) {
-					const clampedEndLine = Math.min(lastAiInsertionRange.endLine, event.document.lineCount - 1);
-					const currentRangeText = event.document.getText(new vscode.Range(lastAiInsertionRange.startLine, 0, clampedEndLine + 1, 0));
-					const score = survivalScore(lastAiInsertionOriginalText, currentRangeText);
-					logTelemetry(
-						'X-AI.Suggestion.SurvivalCheck',
-						null,
-						{survivalScore: score},
-						{
-							file: relFile,
-							parentEventId: lastAiAcceptedEventId ?? undefined,
-							editType: change.rangeLength > 0 ? "Replace" : "Insert"
-						}
-					);
-				}
-			}
-			totalEdits++;
-		})
-	);
+                                // State-gated CUPS transition for full revert
+                                const currentState = cups.getCurrentState();
+                                if (currentState === 'VerifyingSuggestion' || currentState === 'EditingSuggestion') {
+                                    cups.onEditDuringOrAfterSuggestion(relFile, revertEvent.EventID, revertEvent.ClientTimestamp);
+                                }
 
-	context.subscriptions.push(
-		vscode.workspace.onDidSaveTextDocument((document) => {
-			if (isTelemetryLogDocument(document.uri)) return;
-			
-			logTelemetry('File.Save', null, {
-				editsSinceLastSave: totalEdits, 
-			},
-			{ file: vscode.workspace.asRelativePath(document.uri, false), language: document.languageId });
+                                // Reset tracking state
+                                trackingUndos = false;
+                                undoCountSinceAI = 0;
+                                lastAiAcceptedEventId = null;
+                                lastAiAcceptedTime = null;
+                                lastAiInsertionRange = null;
+                                lastAiInsertionOriginalText = null;
+                            } else {
+                                // Partial deletion (e.g. backspacing character-by-character)
+                                // Adjust tracked range and defer telemetry to debounced survival check
+                                if (lastAiInsertionRange) {
+                                    const lineDelta = change.range.end.line - change.range.start.line;
+                                    lastAiInsertionRange = {
+                                        startLine: lastAiInsertionRange.startLine, 
+                                        endLine: Math.max(lastAiInsertionRange.startLine, lastAiInsertionRange.endLine - lineDelta)
+                                    };
+                                }
 
-			const totalChars = cumulativeAiChars + cumulativeManualChars;
-			logTelemetry(
-				'X-Scaffold.DecayCheckpoint', null,
-				{
-					cumulativeAiChars,
-					cumulativeManualChars,
-					aiRatio: totalChars > 0 ? cumulativeAiChars / totalChars : null,
-				},
-				{ file: vscode.workspace.asRelativePath(document.uri, false), initiator: 'ToolReaction' }
-			);
+                                const currentState = cups.getCurrentState();
+                                if (currentState === 'VerifyingSuggestion') {
+                                    cups.onEditDuringOrAfterSuggestion(relFile, 'internal_edit', new Date().toISOString());
+                                }
 
-			writeVerificationBufferLog();
+                                // Trigger debounced survival calculation instead of per-keystroke logging
+                                if (lastAiInsertionRange !== null && lastAiInsertionOriginalText !== null) {
+                                    scheduleSurvivalCheck(relFile, event.document, 'Delete' as EditType);
+                                }
+                            }
+                        }
+                    }
+                    continue; 
+                }
 
-			totalEdits = 0; 
-			totalSaves++;
-		})
-	);
+                // 3. IGNORE EMPTY CHANGES THAT AREN'T DELETIONS
+                if (charCount === 0) continue;
+                
+                if (isJustAcceptedAI) {
+                    cumulativeAiChars += charCount;
+                    continue;
+                }
 
-	context.subscriptions.push({
-		dispose: () => {
-			if (postAIIdleTimer) clearTimeout(postAIIdleTimer); 
-			for (const candidate of pendingPasteCandidates) clearTimeout(candidate.timer);
-			pendingPasteCandidates = [];
-		}
-	});
-	
+                // 4. PASTE DETECTION FOR INSERTIONS
+                const isPaste = charCount >= PASTE_CHAR_THRESHOLD || lineCount > 1 || isWithinAiWindow;
+                if (isPaste) {
+                    schedulePasteCandidate(
+                        relFile,
+                        event.document.languageId,
+                        lineCount,
+                        charCount,
+                        insertedText
+                    );
+                    if (postAIIdleTimer) {
+                        clearTimeout(postAIIdleTimer);
+                        postAIIdleTimer = null;
+                    }
+                    continue; 
+                }
+
+                // 5. MANUAL TYPING
+                cumulativeManualChars += charCount;
+
+                // State-gated generic edit tracking
+                const currentState = cups.getCurrentState();
+                if (currentState !== 'WritingNewCode') {
+                    const editEvent = logTelemetry('File.Edit', null, { lineCount, charCount }, { file: relFile, language: event.document.languageId });
+                    if (currentState === 'VerifyingSuggestion' || currentState === 'Idle') {
+                        cups.onGenericEdit(relFile, editEvent.EventID, editEvent.ClientTimestamp);
+                    }
+                }
+
+                if (postAIIdleTimer) {
+                    clearTimeout(postAIIdleTimer); 
+                    postAIIdleTimer = null;
+                }
+                
+                const editTouchesSuggestion = touchesSuggestion(change);
+
+                if (trackingUndos && relFile === normLastTrackedFile) {
+                    const withinWindow = lastAiAcceptedTime !== null && (Date.now() - lastAiAcceptedTime) <= UNDO_ATTRIBUTION_THRESHOLD;
+                    if (!withinWindow) { 
+                        trackingUndos = false;
+                        undoCountSinceAI = 0;
+                        lastAiAcceptedEventId = null;
+                        lastAiAcceptedTime = null;
+                        lastAiInsertionRange = null;
+                        lastAiInsertionOriginalText = null;
+                    } else if (lastAiInsertionRange) {
+                        lastAiInsertionRange = shiftRangeForEdit(lastAiInsertionRange, change.range.start.line, change.range.end.line, lineCount);
+                    }
+                }
+
+                // Trigger debounced survival check if edit modified AI content
+                if (editTouchesSuggestion && lastAiInsertionRange !== null && lastAiInsertionOriginalText !== null) {
+                    scheduleSurvivalCheck(relFile, event.document, change.rangeLength > 0 ? "Replace" : "Insert");
+                }
+            }
+            totalEdits++;
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.workspace.onDidSaveTextDocument((document) => {
+            if (isTelemetryLogDocument(document.uri)) return;
+            
+            logTelemetry('File.Save', null, {
+                editsSinceLastSave: totalEdits, 
+            },
+            { file: vscode.workspace.asRelativePath(document.uri, false), language: document.languageId });
+
+            const totalChars = cumulativeAiChars + cumulativeManualChars;
+            logTelemetry(
+                'X-Scaffold.DecayCheckpoint', null,
+                {
+                    cumulativeAiChars,
+                    cumulativeManualChars,
+                    aiRatio: totalChars > 0 ? cumulativeAiChars / totalChars : null,
+                },
+                { file: vscode.workspace.asRelativePath(document.uri, false), initiator: 'ToolReaction' }
+            );
+
+            writeVerificationBufferLog();
+
+            totalEdits = 0; 
+            totalSaves++;
+        })
+    );
+
+    context.subscriptions.push({
+        dispose: () => {
+            if (postAIIdleTimer) clearTimeout(postAIIdleTimer); 
+            if (survivalCheckTimer) clearTimeout(survivalCheckTimer);
+            for (const candidate of pendingPasteCandidates) clearTimeout(candidate.timer);
+            pendingPasteCandidates = [];
+        }
+    });
+    
     return {
         getStats() {
             return { totalEdits, totalSaves };
