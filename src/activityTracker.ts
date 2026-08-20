@@ -280,6 +280,13 @@ export function startActivityTracking(context: vscode.ExtensionContext) {
                 const charCount = insertedText.length;
                 const isDeletion = change.text === '' && change.rangeLength > 0;
 
+                const isOnlyWhitespace = /^\s*$/.test(insertedText);
+
+                if (isOnlyWhitespace) {
+                // Ignore auto-indent / newline insertions from paste detection
+                return;
+                }
+                
                 // 2. CHECK UNDOS / MANUAL REVERTS FIRST
                 if (isDeletion) {
                     if (trackingUndos && relFile === normLastTrackedFile) {

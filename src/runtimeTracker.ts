@@ -153,6 +153,8 @@ export function registerAutomaticRuntimeTracker(context: vscode.ExtensionContext
                     sourceLocation: firstFrame ? { startLine: firstFrame.line } : undefined
                 });
                 
+            // Notify CUPS of execution/error state
+            cups.onRunOrCompileError(relFile, event.EventID, event.ClientTimestamp);
             } else {
                 // Case B: Clean execution
                 const event = logTelemetry('Run.Program', null, { 
@@ -161,7 +163,9 @@ export function registerAutomaticRuntimeTracker(context: vscode.ExtensionContext
                     language,
                     reason: 'success' 
                 });
-                
+            
+            // Notify CUPS of execution/error state
+            cups.onRunOrCompileError(relFile, event.EventID, event.ClientTimestamp);
             }
         })
     );

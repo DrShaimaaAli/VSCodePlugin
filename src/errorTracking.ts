@@ -2,7 +2,7 @@
 // logging a snapshot of error diagnostics each time the user saves.
 import * as vscode from 'vscode';
 import { logTelemetry, isTelemetryLogDocument} from './telemetry';
-//import * as cups from './cupsStateTracker';
+import * as cups from './cupsStateTracker';
 
 interface TrackedError{
     eventId: string; // the X-Error.Introduced event ID that introduced this error
@@ -79,7 +79,7 @@ export function startErrorTracking(context: vscode.ExtensionContext) {
                     }
                 });
                 openErrors.set(key, {eventId: event.EventID, introducedAt: Date.now(), savesSeen: 1});
-                // cups.onRunOrComileError(relFile, event.EventID, event.ClientTimestamp);
+                cups.onRunOrCompileError(relFile, event.EventID, event.ClientTimestamp);
                 }
             }
 
