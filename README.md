@@ -115,9 +115,9 @@ If you want to verify that the extension compiles successfully before launching 
 npm run compile
 ```
 
-## Testing the extension
+## Testing the extension and programming states
 
-Once the Extension Development Host is running, you can exercise the full telemetry flow with the steps below.
+Once the Extension Development Host is running, you can exercise the full telemetry flow and verify Programming State transitions with the steps below.
 
 ### 1. File save and file close
 
@@ -127,7 +127,7 @@ Once the Extension Development Host is running, you can exercise the full teleme
 - Close the tab or document.
 - This should log a File.Close event.
 
-### 2. Error tracker
+### 2. Error tracker and Debugging state
 
 - Open a file that can produce diagnostics, such as a Python or TypeScript file with an obvious syntax or runtime error.
 - Save the file after introducing the error.
@@ -137,7 +137,7 @@ Once the Extension Development Host is running, you can exercise the full teleme
   - Compile
   - X-Error.Persisted on later saves if the error remains
 - Fix the error and save again.
-- The extension should log X-Error.Resolved when the diagnostic disappears.
+- The extension should log X-Error.Resolved when the diagnostic disappears and transition out of Debugging.
 
 ### 3. Runtime tracker / debug execution
 
@@ -149,27 +149,28 @@ Once the Extension Development Host is running, you can exercise the full teleme
 - If the runtime is missing, the extension logs a runtime-not-found error and shows a warning message.
 - A previous bug caused the runtime tracker to time out when the program hit an input block, such as waiting for user input from stdin. That is no longer the case; interactive execution is handled without treating input waits as a timeout.
 
-### 4. Idle time tracking
+### 4. Idle time tracking (Idle state)
 
 - Leave the Extension Development Host window idle for more than 2 minutes.
-- The session tracker should log an X-Session.Idle.Start event once the idle threshold is reached.
-- Resume activity by typing or editing again.
-- The tracker should then log X-Session.Idle.End and resume normal session tracking.
+- Expected Telemetry:
+  - Logs an X-Session.Idle.Start event.
+  - State Transition: ProgrammerState transitions to Idle.
+- Type or move the cursor in the editor.
+- Expected Telemetry: Logs X-Session.Idle.End, records StateDurationMs, and returns to the active state.
 
 ### 5. AI suggestion acceptance, survival, and revert
 
-Accepting an AI completion fires X-AI.Suggestion.Accepted and moves CUPS state to VerifyingSuggestion.
-
+Accepting an inline AI completion triggers specific suggestion life-cycle tracking:
+- State Shift to VerifyingSuggestion:
+  - Triggering an AI completion fires X-AI.Suggestion.Accepted and immediately sets ProgrammerState to VerifyingSuggestion.
 - Undo / Revert Tracking:
-  - Performing a full Ctrl+Z or selecting and deleting the entire insertion logs X-AI.Suggestion.Reverted (Full).
-  - Character-by-character backspacing adjusts the tracked line ranges dynamically without spamming revert logs.
-
-- Debounced Survival Checks:
-  - Modifying AI-generated text triggers a debounced (1.5-second) survival check (X-AI.Suggestion.SurvivalCheck), logging an n-gram Jaccard similarity score.
-  - Short strings (<4 characters) automatically use exact normalized string matching to avoid false 100% survival scores.
-  - If survival score drops below 0.5, CUPS state transitions to EditingSuggestion.
-  
-- A new command, CodexLog: Open Verification Buffer Log, opens the generated verification-buffer file for inspecting derived timing metrics such as bufferMs.
+  - Performing a full Ctrl+Z or deleting the entire inserted block logs X-AI.Suggestion.Reverted (Full).
+  - Character-by-character backspacing adjusts line ranges dynamically.
+- Debounced Survival Checks & Shift to EditingSuggestion:
+  - Modifying AI-generated text triggers a debounced (1.5-second) survival check (X-AI.Suggestion.SurvivalCheck), recording an n-gram Jaccard similarity score.
+  - Short strings (<4 characters) automatically use exact normalized string matching.
+  - If the survival score drops below 0.5, ProgrammerState shifts from EditingSuggestion to standard EditingCode.
+- Inspect timing metrics (e.g., bufferMs) by running CodexLog: Open Verification Buffer Log.
 
 ### 6. Scaffold decay rate
 
@@ -193,24 +194,23 @@ The telemetry output is written to the extension storage area and can be inspect
 
 ## Development notes
 
-- Source is under `src/`.
-- Activity tracking is implemented in `src/activityTracker.ts` and captures edits, saves, AI suggestion outcomes, undo behavior, active editing state, and AI-suggestion survival scoring.
-- Runtime execution tracking is implemented in `src/runtimeTracker.ts` for supported Python, JavaScript, and TypeScript files and now auto-triggers during debug sessions.
-- Error tracking is implemented in `src/errorTracking.ts` and captures runtime failures, console errors, and diagnostics.
-- Telemetry logging is centralized in `src/telemetry.ts`, and the shared schema lives in `src/types.ts`.
-- Events are persisted as JSON for local storage and later analysis.
-- Session tracking and Copilot detection are wired in through `src/sessionTracker.ts` and `src/detectCopilot.ts`.
-- The extension also registers a telemetry summary command in `src/extension.ts` for quick inspection.
+- Source files are located under src/.
+- Activity & State Tracking: Implemented in src/activityTracker.ts (captures edits, saves, AI suggestion outcomes, undo behavior, CUPS state transitions, and survival scoring).
+- Runtime Execution Tracking: Implemented in src/runtimeTracker.ts for Python, JavaScript, and TypeScript debug sessions.
+- Error Tracking: Implemented in src/errorTracking.ts (captures runtime failures, console errors, and editor diagnostics).
+- Centralized Telemetry & Schema: Handled in src/telemetry.ts and src/types.ts.
+- Session & Copilot Integration: Implemented in src/sessionTracker.ts and src/detectCopilot.ts.
+- Extension Registry & Commands: Registered in src/extension.ts.
 
 ## Current state
 
-- Activity tracking for edits, saves, AI-suggestion acceptance/reversion, post-AI editing behavior, AI-suggestion survival scoring, and regret-window summaries is in place.
-- Structured telemetry events are being logged in a ProgSnap2-inspired schema.
-- Scaffold decay-rate checkpoints are now emitted to track how much AI-generated content persists across later edits and saves.
-- Runtime tracking now auto-starts during debugging and no longer times out on input-blocking programs.
-- Session lifecycle handling is more robust, with persisted state reducing false session churn on close, refresh, and crash scenarios.
-- The event format is being prepared for integration with CUPS-style state modeling.
-- The logging pipeline is being positioned as the foundation for AI-generated personalized feedback prompts.
+- Activity tracking for edits, saves, AI-suggestion acceptance/reversion, post-AI editing behavior, AI-suggestion survival scoring, and regret-window summaries is operational.
+- Structured telemetry events are logged under a ProgSnap2-inspired schema.
+- Dynamic CUPS programming state modeling is fully integrated into the event stream.
+- Scaffold decay-rate checkpoints are emitted to monitor AI content persistence over time.
+- Runtime tracking auto-starts during debugging without input-blocking timeouts.
+- Session lifecycle handling persists state to avoid false session boundaries.
+- The pipeline is prepared for generating downstream AI-personalized feedback prompts.
 
 ## Files of interest
 

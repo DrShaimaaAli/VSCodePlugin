@@ -1,149 +1,71 @@
 # Changelog
 
-All notable changes to CodexLog are documented here.
-Format loosely follows Keep a Changelog.
+All notable changes to CodexLog are documented in this file.
 
-## [Unreleased] — behavioral state layer
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [Unreleased] — Behavioral State Layer
 
 ### Added
-
-
-ProgrammerStates table (programmerStates.json) — segments of session
-time labeled with a CUPS-inspired behavioral state (WritingNewCode,
-VerifyingSuggestion, EditingSuggestion, DebuggingTesting, Idle),
-adapted from Mozannar et al., Reading Between the Lines: Modeling User
-Behavior and Costs in AI-Assisted Programming (CHI 2024)
-cupsStateTracker.ts — a rule-based classifier mapping raw events to
-behavioral state transitions, with ParentEventID-style linking between
-segment boundaries and the real events that triggered them
-EventInitiator field on every event (UserDirectAction /
-ToolReaction / ToolTimedEvent), distinguishing direct student actions
-from tool-driven events (idle timers, linter runs)
-EditType, CompileResult, ExecutionResult, and SourceLocation
-fields, adopted directly from the ProgSnap2 spec in place of earlier
-ad hoc EventSubtype values
-X-Workspace.Folders.Changed event type (found missing during migration)
-Stack-trace error logging can now be triggered from the Debug button
-through the VS Code Debug Adapter Protocol (DAP) via debug adapter
-tracking. This uses the same debug-adapter lifecycle hooks implemented
-by the Python, Node.js, Java, and C++ extensions, so it works
-consistently across languages. It is only available when code is run in
-a debugging session; ordinary Run / Start without debug does not emit
-these adapter events, so stack traces cannot be captured in that mode.
-Copilot OTEL telemetry now includes the survival score metric, adding
-another signal for runtime persistence and agent/assistant outcomes.
-A new regret-window summary is now emitted after AI-suggestion acceptance
-to track follow-up deletions in a short post-acceptance window. This is
-intended as an optional post-hoc analysis signal rather than a definitive
-measure of confusion or regret.
-A scaffold decay-rate checkpoint now records cumulative AI-inserted
-versus manually typed characters on save, providing a longitudinal view
-of how much suggested scaffold persists across later edits.
-A verification-buffer log can now be opened from the Command Palette via
-CodexLog: Open Verification Buffer Log, exposing derived bufferMs-style
-analysis data for external inspection.
-
+* **ProgrammerStates Table (`programmerStates.json`):** Tracks segments of session time labeled with CUPS-inspired behavioral states (`WritingNewCode`, `VerifyingSuggestion`, `EditingSuggestion`, `DebuggingTesting`, `Idle`), adapted from Mozannar et al. (*CHI 2024*).
+* **`cupsStateTracker.ts`:** Implements a rule-based classifier mapping raw events to behavioral state transitions, featuring `ParentEventID`-style linking between segment boundaries and triggering events.
+* **`EventInitiator` Attribute:** Added to every event (`UserDirectAction` / `ToolReaction` / `ToolTimedEvent`) to distinguish direct student actions from tool-driven events (e.g., idle timers, linter runs).
+* **ProgSnap2 Schema Attributes:** Integrated `EditType`, `CompileResult`, `ExecutionResult`, and `SourceLocation` fields directly from the ProgSnap2 specification in place of legacy ad-hoc `EventSubtype` values.
+* **`X-Workspace.Folders.Changed` Event:** Added missing event type found during migration.
+* **Debug Adapter Protocol (DAP) Stack Tracing:** Enables stack-trace error logging directly from the Debug button via VS Code Debug Adapter hooks (supported across Python, Node.js, Java, and C++ extensions). *Note: Only available during active debugging sessions.*
+* **Copilot OTel Survival Score:** Integrated survival score metrics into Copilot telemetry to provide signals for runtime persistence and assistant outcomes.
+* **Post-Acceptance Regret-Window Summary:** Emits post-hoc analysis signals tracking follow-up deletions occurring within a short window after AI suggestion acceptance.
+* **Scaffold Decay-Rate Checkpoint:** Emits cumulative AI-inserted vs. manually typed character ratios on save to provide a longitudinal persistence metric.
+* **Verification Buffer Log Command:** Added `CodexLog: Open Verification Buffer Log` to the Command Palette to inspect derived `bufferMs` timing metrics.
 
 ### Changed
-
-
-Compile.Error / Compile.Success collapsed into a single Compile
-event type with a CompileResult field
-Run.Program's result moved from EventSubtype into a dedicated
-ExecutionResult field
-File.Edit logging throttled to state-transition boundaries only,
-instead of never being logged at all — bounds event volume while still
-feeding the behavioral classifier
-
+* **Collapsed Compile Events:** Merged `Compile.Error` and `Compile.Success` into a unified `Compile` event type carrying a `CompileResult` field.
+* **Execution Result Field:** Relocated `Run.Program` results out of `EventSubtype` into a dedicated `ExecutionResult` attribute.
+* **Throttled File-Edit Logging:** Restricted `File.Edit` telemetry output exclusively to state-transition boundaries, drastically reducing event volume while preserving behavioral classification input.
 
 ### Fixed
+* **Diagnostic Filter Template String:** Fixed string literal bug in `errorTracking.ts` (`'${relFile}::'` $\rightarrow$ `` `${relFile}::` ``) that silently disabled `X-Error.Persisted` and `X-Error.Resolved` logging.
+* **Listener Syntax Error:** Added missing closing brace in `errorTracking.ts` (`closeListener`).
+* **Edit Handler Syntax Error:** Removed duplicate closing brace in `activityTracker.ts` edit handler.
+* **AI-Suggestion Reversion Window & Range:** Resolved unbounded revert attribution on `X-AI.Suggestion.Reverted`:
+  * Added a 60-second time bound (`UNDO_ATTRIBUTION_WINDOW_MS`).
+  * Implemented line-range tracking (`lastAiInsertionRange`) so only deletions directly overlapping AI-inserted lines register as reverts.
+  * Fixed range-shrink math by changing the formula from lines spanned (`editEndLine - editStartLine + 1`) to lines removed (`editEndLine - editStartLine`), preventing single-line backspaces from collapsing the tracked range prematurely.
+* **Git URI File-Close Filter:** Filtered out virtual Git scheme URIs (`git://`) in `onDidCloseTextDocument` listeners to prevent non-workspace file disposals from logging as user `File.Close` events with full Windows paths.
+* **Session Lifecycle Persistence:** Persisted session state across window refreshes, unexpected crashes, and close events to eliminate false `Session.Start` and `Session.End` churn.
 
+---
 
-File-scoping filter in errorTracking.ts used a plain string
-('${relFile}::') instead of a template literal, silently disabling all
-X-Error.Persisted / X-Error.Resolved logging with no compile error
-closeListener in errorTracking.ts was missing its closing brace,
-breaking compilation
-Extra closing brace in activityTracker.ts's edit handler, introduced
-while commenting out CUPS integration calls, broke compilation
-X-AI.Suggestion.Reverted had no time limit on how long a deletion could
-be attributed to an earlier AI-suggestion acceptance — found via real
-session data showing undoCount: 24 with removedChars: 2, meaning
-ordinary backspaces made minutes later, unrelated to the original
-suggestion, were being logged as reverting it. Fixed in two layers:
-a 60-second outer time bound (UNDO_ATTRIBUTION_WINDOW_MS) on how long
-tracking continues at all, and — more precisely — line-range tracking
-(lastAiInsertionRange) so only deletions that actually overlap the
-AI-inserted lines count as reverting it, with the range shifted correctly
-as other edits add/remove lines around it
-The line-range tracking above had its own bug on introduction: the
-partial-revert shrink formula used the "lines spanned" convention
-(editEndLine - editStartLine + 1) instead of "lines actually removed"
-(editEndLine - editStartLine), so every same-line backspace — even a
-1-2 character one — incorrectly chopped a full line off the tracked
-range. Verified this collapsed a 5-line range to nothing after ~5
-ordinary backspaces; fixed by dropping the + 1.
-File-close tracking now ignores Git internal documents. The
-onDidCloseTextDocument event listener previously captured background
-Git disposals and logged them as user File.Close events because it did
-not explicitly filter out non-file document schemes. Because these
-virtual Git URIs do not map cleanly to workspace files,
-vscode.workspace.asRelativePath could fall back to printing the full
-absolute Windows path with ".git" appended, which is now avoided.
-Session lifecycle handling is now more robust: Session.Start and
-Session.End are tied to persisted session state so they are less likely
-to produce false session churn when the window is closed, refreshed, or
-crashes unexpectedly.
-
-
-## [0.2.0] — ProgSnap2-style schema
+## [0.2.0] — ProgSnap2-Style Schema
 
 ### Added
-
-
-CodeStates table (codeStates.json) and createCodeState(), separating
-bulky code snapshots from the lean event stream (not yet called by any
-tracker)
-Order, SessionID, SubjectID (hashed, pseudonymous), ParentEventID,
-and X-InterEventDeltaMs (pause-time signal) fields on every event
-Error introduce/persist/resolve pairing in errorTracking.ts — replaces
-the old flat per-save error-count snapshot with real time-to-fix data
-EVENT_SCHEMA.md — full schema specification and design rationale
-
+* **CodeStates Table (`codeStates.json`):** Introduced `createCodeState()` to decouple large code snapshots from the primary event stream.
+* **Core Event Identifiers:** Added `Order`, `SessionID`, `SubjectID` (hashed/pseudonymous), `ParentEventID`, and `X-InterEventDeltaMs` (pause-time signal) to all telemetry events.
+* **Error Lifespan Pairing:** Implemented error introduce/persist/resolve tracking in `errorTracking.ts` to replace flat per-save snapshots with actionable time-to-fix metrics.
+* **`EVENT_SCHEMA.md`:** Added complete schema specification and architectural rationale documentation.
 
 ### Changed
+* **Logger Signature Update:** Refactored `logTelemetry()` signature from `(eventName, data)` to `(type, subtype, data, opts)` to align with ProgSnap2 standard structures.
+* **JSON Serialization:** Replaced string-splicing event log writers with structured JSON parse/stringify serialization.
 
+---
 
-logTelemetry() signature changed from (eventName, data) to
-(type, subtype, data, opts), matching the new structured schema
-Event log storage rewritten from manual string-splicing to proper
-JSON parse/stringify (simpler, less fragile, though more expensive per
-write — acceptable at current event volume)
-
-
-## [0.1.1] — critical bug fix
+## [0.1.1] — Critical Bug Fix
 
 ### Fixed
+* **Telemetry Self-Logging Loop:** Fixed an infinite loop where opening the log file via `codexlog.openLog` caused log file writes to be detected as user document edits, triggering secondary AI-insertion logging cycles. Resolved by adding `isTelemetryLogDocument()` in `telemetry.ts` to filter log document events.
 
+---
 
-Infinite self-logging loop: opening the telemetry log via
-codexlog.openLog caused every subsequent log write to be picked up by
-VS Code as an external file change, which the AI-suggestion heuristic
-misclassified as a large insertion, which got logged, which triggered
-another change — repeating indefinitely. Fixed by adding
-isTelemetryLogDocument() in telemetry.ts as a single source of truth,
-checked by every document-event listener before processing.
-
-
-## [0.1.0] — initial extension
+## [0.1.0] — Initial Extension
 
 ### Added
-
-
-Session tracking: start/end, idle detection, workspace folder changes
-Activity tracking: edit/save counts, heuristic AI-suggestion detection
-(≥3 lines, ≥50 chars, pure insertion) with undo/revert tracking
-Error tracking: per-save diagnostics snapshot
-Runtime tracking: run a file, parse stack traces on failure
-Copilot install/active status detection
-Flat {event, timestamp, data} telemetry log format
+* **Session Tracking:** Initial implementation for start/end lifecycle handling, 2-minute idle detection, and workspace folder state tracking.
+* **Activity & AI Detection:** Basic tracking for file saves and edits, paired with heuristic AI-suggestion detection ($\ge$3 lines, $\ge$50 chars, pure insertion) and basic undo metrics.
+* **Error Tracking:** Diagnostics collection firing per-save error snapshots.
+* **Runtime Execution Tracking:** Program execution tracking with stack-trace parsing on script failures.
+* **Copilot Detection:** Detects Copilot extension installation and active state.
+* **Telemetry Storage:** Initial flat `{event, timestamp, data}` JSON telemetry output.
